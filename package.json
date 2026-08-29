@@ -1,0 +1,23 @@
+{
+  "name": "focusuniv",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "netlify dev",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "netlify database migrations apply"
+  },
+  "dependencies": {
+    "@netlify/database": "^0.4.0",
+    "@netlify/functions": "^4.2.5",
+    "@netlify/identity": "^0.3.0",
+    "drizzle-orm": "beta",
+    "openai": "^4.104.0"
+  },
+  "devDependencies": {
+    "drizzle-kit": "beta",
+    "netlify-cli": "^23.0.0",
+    "typescript": "^5.9.2"
+  }
+}

@@ -1,0 +1,11 @@
+.netlify
+node_modules
+.env
+.env.*
+!.env.example
+.DS_Store
+.impeccable/chrome-*
+.impeccable/chrome-profile
+.impeccable/questions
+.impeccable/review/*.html
+
