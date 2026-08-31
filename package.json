@@ -9,14 +9,14 @@
     "db:migrate": "netlify database migrations apply"
   },
   "dependencies": {
-    "@netlify/database": "^0.4.0",
+    "@netlify/database": "^2.0.0",
     "@netlify/functions": "^4.2.5",
     "@netlify/identity": "^0.3.0",
-    "drizzle-orm": "beta",
+    "drizzle-orm": "^1.0.0-beta.22",
     "openai": "^4.104.0"
   },
   "devDependencies": {
-    "drizzle-kit": "beta",
+    "drizzle-kit": "^1.0.0-beta.22",
     "netlify-cli": "^23.0.0",
     "typescript": "^5.9.2"
   }
