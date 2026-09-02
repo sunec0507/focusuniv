@@ -1247,6 +1247,54 @@ textarea.field { min-height: 88px; resize: vertical; }
   border: 1px solid var(--line);
   border-radius: var(--radius);
 }
+.poll-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.poll-card-head > div:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.poll-card-more { position: relative; flex: none; }
+.poll-card-more .icon-btn {
+  width: 32px;
+  height: 32px;
+  color: var(--ink);
+  background: var(--paper);
+  border: 0.5px solid var(--line);
+}
+.poll-card-more .icon-btn.on {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.poll-card-pop {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  min-width: 148px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 6px;
+  z-index: 30;
+  box-shadow: var(--shadow);
+}
+.poll-card-pop button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 8px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 650;
+  text-align: left;
+}
+.poll-card-pop button:hover { background: var(--rail); }
+.poll-card-pop button.danger-text { color: var(--danger); }
 .poll-grid-wrap { overflow-x: auto; }
 .poll-grid {
   display: grid;

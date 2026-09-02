@@ -155,6 +155,30 @@ export default async (req: Request, _context: Context) => {
     return json({ poll: { ...poll, responses: [] } });
   }
 
+  if (body.action === "update-poll") {
+    const pollId = String(body.pollId || body.id || "");
+    const title = String(body.title || "").trim();
+    if (!pollId || !title) return json({ error: "title-required" }, 400);
+    const [poll] = await db.select().from(meetingPolls).where(eq(meetingPolls.id, pollId)).limit(1);
+    if (!poll) return json({ error: "missing" }, 404);
+    const [group] = await db.select().from(groups).where(eq(groups.id, poll.groupId)).limit(1);
+    if (poll.createdBy !== user.id && (!group || !isMember(group, user.id))) return json({ error: "forbidden" }, 403);
+    await db.update(meetingPolls).set({ title }).where(eq(meetingPolls.id, pollId));
+    return json({ poll: { ...poll, title } });
+  }
+
+  if (body.action === "delete-poll") {
+    const pollId = String(body.pollId || body.id || "");
+    if (!pollId) return json({ error: "missing" }, 400);
+    const [poll] = await db.select().from(meetingPolls).where(eq(meetingPolls.id, pollId)).limit(1);
+    if (!poll) return json({ error: "missing" }, 404);
+    const [group] = await db.select().from(groups).where(eq(groups.id, poll.groupId)).limit(1);
+    if (poll.createdBy !== user.id && (!group || !isMember(group, user.id))) return json({ error: "forbidden" }, 403);
+    await db.delete(pollResponses).where(eq(pollResponses.pollId, pollId));
+    await db.delete(meetingPolls).where(eq(meetingPolls.id, pollId));
+    return json({ ok: true, id: pollId });
+  }
+
   if (body.action === "mark-availability") {
     const pollId = String(body.pollId || "");
     const [poll] = await db.select().from(meetingPolls).where(eq(meetingPolls.id, pollId)).limit(1);

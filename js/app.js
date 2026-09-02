@@ -131,6 +131,8 @@ const ui = {
   availResult: null,
   availGroupId: null,
   pollGroupId: null,
+  pollEditId: null,
+  pollMenu: null,
   pollDrafts: {},
   pollHover: null,
   settingsTab: "account",
@@ -150,6 +152,8 @@ let remoteProfiles = [];
 let remotePolls = [];
 let profilesReady = false;
 let profilesRequest = null;
+let bundleGen = 0;
+const deletedPollIds = new Set();
 const pollSaveSeq = {};
 
 const GROUP_TABS = ["tasks", "projects", "schedule"];
@@ -339,19 +343,41 @@ function assigneeChoices(group) {
   return names;
 }
 
+function upsertRemotePoll(poll) {
+  if (!poll?.id || deletedPollIds.has(poll.id)) return;
+  const idx = remotePolls.findIndex((item) => item.id === poll.id);
+  remotePolls =
+    idx >= 0
+      ? remotePolls.map((item) => (item.id === poll.id ? { ...item, ...poll } : item))
+      : [poll, ...remotePolls];
+}
+
+function applyIncomingPolls(incoming) {
+  const list = (Array.isArray(incoming) ? incoming : []).filter((item) => item?.id && !deletedPollIds.has(item.id));
+  const ids = new Set(list.map((item) => item.id));
+  const pending = remotePolls.filter(
+    (item) => item.pendingCreate && item.id && !ids.has(item.id) && !deletedPollIds.has(item.id),
+  );
+  remotePolls = [...pending, ...list];
+}
+
 function ensureRemoteProfiles() {
   if (!auth.user() || profilesReady || profilesRequest) return;
+  const gen = bundleGen;
   profilesRequest = auth
     .fetchGroupBundle()
     .then((data) => {
+      if (gen !== bundleGen) return;
       remoteProfiles = Array.isArray(data?.profiles) ? data.profiles : [];
-      remotePolls = Array.isArray(data?.polls) ? data.polls : [];
+      applyIncomingPolls(data?.polls);
     })
     .catch(() => {
+      if (gen !== bundleGen) return;
       remoteProfiles = [];
-      remotePolls = [];
+      remotePolls = remotePolls.filter((item) => item.pendingCreate);
     })
     .finally(() => {
+      if (gen !== bundleGen) return;
       profilesReady = true;
       profilesRequest = null;
       render();
@@ -366,6 +392,7 @@ function requireLoginForGroups() {
 }
 
 function refreshGroupBundle() {
+  bundleGen += 1;
   profilesReady = false;
   profilesRequest = null;
   ensureRemoteProfiles();
@@ -2492,10 +2519,23 @@ function viewPollGrid(poll, group) {
     ? rows.filter((row) => (row.slots || []).includes(hover)).map((row) => memberLabel(row.userId))
     : [];
   return `
-    <article class="poll-card">
-      <div class="sched-head">
-        <b>${escapeHtml(poll.title || "약속 잡기")}</b>
-        <span>${escapeHtml(poll.startTime || "09:00")}–${escapeHtml(poll.endTime || "22:00")}</span>
+    <article class="poll-card" data-poll-card="${poll.id}">
+      <div class="sched-head poll-card-head">
+        <div>
+          <b>${escapeHtml(poll.title || "약속 잡기")}</b>
+          <span>${escapeHtml(poll.startTime || "09:00")}–${escapeHtml(poll.endTime || "22:00")}</span>
+        </div>
+        <div class="poll-card-more">
+          <button type="button" class="icon-btn ${ui.pollMenu === poll.id ? "on" : ""}" data-act="poll-menu" data-id="${poll.id}" title="약속 편집" aria-label="약속 편집" aria-expanded="${ui.pollMenu === poll.id ? "true" : "false"}">${icon("moreVertical", 16)}</button>
+          ${
+            ui.pollMenu === poll.id
+              ? `<div class="poll-card-pop">
+                  <button type="button" data-act="rename-poll" data-id="${poll.id}">이름 수정</button>
+                  <button type="button" class="danger-text" data-act="del-poll" data-id="${poll.id}">삭제</button>
+                </div>`
+              : ""
+          }
+        </div>
       </div>
       <div class="poll-grid-wrap">
         <div class="poll-grid" style="--poll-cols:${dates.length}">
@@ -3243,6 +3283,19 @@ function modalHtml() {
         </div>
         <p class="page-date">최대 14일까지 한 번에 고를 수 있어요</p>
         <button class="primary" type="submit">만들기</button>
+        <button class="ghost" type="button" data-act="close-modal">취소</button>
+      </form>
+    </div></div>`;
+  }
+  if (ui.modal === "poll-rename") {
+    const poll = remotePolls.find((item) => item.id === ui.pollEditId);
+    if (!poll) return "";
+    return `<div class="modal-back" data-act="close-modal"><div class="modal" data-stop="1">
+      <h2>약속 이름 수정</h2>
+      <form class="stack" data-act="save-poll-title">
+        <input type="hidden" name="id" value="${escapeHtml(poll.id)}">
+        <input class="field" name="title" placeholder="제목" value="${escapeHtml(poll.title || "")}" required>
+        <button class="primary" type="submit">저장</button>
         <button class="ghost" type="button" data-act="close-modal">취소</button>
       </form>
     </div></div>`;
@@ -4643,6 +4696,8 @@ function onClick(event) {
     ui.editingTaskId = null;
     ui.eventId = null;
     ui.pollGroupId = null;
+    ui.pollEditId = null;
+    ui.pollMenu = null;
     ui.newPageParent = "";
     ui.newPageGroupId = "";
     render();
@@ -4687,6 +4742,9 @@ function onClick(event) {
     } else if (ui.timetableMenu && !event.target.closest(".tt-switch-more")) {
       ui.timetableMenu = false;
       render();
+    } else if (ui.pollMenu && !event.target.closest(".poll-card-more")) {
+      ui.pollMenu = null;
+      render();
     } else if (ui.docTabMenu && !event.target.closest(".doc-tab")) {
       ui.docTabMenu = null;
       render();
@@ -4703,6 +4761,9 @@ function onClick(event) {
   }
   if (ui.timetableMenu && act !== "tt-menu" && !event.target.closest(".tt-switch-more")) {
     ui.timetableMenu = false;
+  }
+  if (ui.pollMenu && act !== "poll-menu" && !event.target.closest(".poll-card-more")) {
+    ui.pollMenu = null;
   }
   if (act === "toggle-task") store.toggleTask(id);
   else if (act === "task-menu") {
@@ -5347,6 +5408,31 @@ function onClick(event) {
   } else if (act === "toggle-poll-slot") {
     togglePollSlot(actEl.dataset.poll, actEl.dataset.slot);
     return;
+  } else if (act === "poll-menu") {
+    ui.pollMenu = ui.pollMenu === id ? null : id;
+  } else if (act === "rename-poll") {
+    ui.pollMenu = null;
+    ui.pollEditId = id;
+    ui.modal = "poll-rename";
+  } else if (act === "del-poll") {
+    ui.pollMenu = null;
+    const poll = remotePolls.find((item) => item.id === id);
+    if (!confirm(`"${poll?.title || "약속"}"을 삭제할까요?`)) return;
+    auth
+      .deletePoll(id)
+      .then(() => {
+        deletedPollIds.add(id);
+        remotePolls = remotePolls.filter((item) => item.id !== id);
+        if (ui.pollEditId === id) {
+          ui.pollEditId = null;
+          ui.modal = null;
+        }
+        render();
+      })
+      .catch(() => {
+        alert("약속을 삭제하지 못했어요. 잠시 후 다시 시도해주세요.");
+      });
+    return;
   } else if (act === "meet-ai") {
     runMeetingAi(id);
     return;
@@ -5397,6 +5483,8 @@ function onClick(event) {
     ui.editingTaskId = null;
     ui.eventId = null;
     ui.pollGroupId = null;
+    ui.pollEditId = null;
+    ui.pollMenu = null;
     ui.newPageParent = "";
     ui.newPageGroupId = "";
   } else if (act === "start-add") ui.addingCategory = actEl.dataset.cat;
@@ -5408,6 +5496,9 @@ function onClick(event) {
   }
   if (act === "open-course" || act === "edit-course") {
     requestAnimationFrame(() => document.querySelector("form[data-act='add-course'] [name='title']")?.focus());
+  }
+  if (act === "rename-poll") {
+    requestAnimationFrame(() => document.querySelector("form[data-act='save-poll-title'] [name='title']")?.focus());
   }
 }
 
@@ -5587,27 +5678,67 @@ function onSubmit(event) {
       alert("종료 시간이 시작 시간보다 늦어야 합니다.");
       return;
     }
+    const groupId = String(data.get("groupId") || ui.pollGroupId || groupRoute()?.groupId || "");
+    if (!groupId) {
+      alert("그룹을 찾을 수 없어요. 그룹 일정 탭에서 다시 시도해주세요.");
+      return;
+    }
     auth
       .createPoll({
-        groupId: data.get("groupId") || ui.pollGroupId,
-        groupName: store.getState().groups.find((item) => item.id === (data.get("groupId") || ui.pollGroupId))?.name,
-        inviteCode: store.getState().groups.find((item) => item.id === (data.get("groupId") || ui.pollGroupId))?.inviteCode,
+        groupId,
+        groupName: store.getState().groups.find((item) => item.id === groupId)?.name,
+        inviteCode: store.getState().groups.find((item) => item.id === groupId)?.inviteCode,
         title: data.get("title"),
         dates,
         startTime: data.get("startTime") || "09:00",
         endTime: data.get("endTime") || "22:00",
       })
       .then((result) => {
-        if (result?.poll) remotePolls = [...remotePolls, result.poll];
+        if (!result?.poll) throw new Error("empty-poll");
+        upsertRemotePoll({
+          ...result.poll,
+          pendingCreate: true,
+          groupId: result.poll.groupId || groupId,
+          responses: Array.isArray(result.poll.responses) ? result.poll.responses : [],
+        });
         ui.modal = null;
-        const groupId = String(data.get("groupId") || ui.pollGroupId || groupRoute()?.groupId || "");
         ui.pollGroupId = null;
+        ui.pollEditId = null;
+        ui.pollMenu = null;
         ui.groupTab = "schedule";
-        if (groupId) go(groupPath(groupId, "schedule"));
-        else render();
+        const dest = `#${groupPath(groupId, "schedule")}`;
+        if (location.hash !== dest) go(groupPath(groupId, "schedule"));
+        render();
+        requestAnimationFrame(() => {
+          document.querySelector(`[data-poll-card="${result.poll.id}"]`)?.scrollIntoView({
+            block: "center",
+            behavior: "smooth",
+          });
+        });
+        refreshGroupBundle();
       })
       .catch(() => {
         alert("약속 잡기를 만들지 못했어요. 로그인 상태와 그룹 멤버 여부를 확인해주세요.");
+      });
+    return;
+  } else if (act === "save-poll-title") {
+    const pollId = String(data.get("id") || ui.pollEditId || "");
+    const title = String(data.get("title") || "").trim();
+    if (!pollId || !title) {
+      alert("제목을 입력해주세요.");
+      return;
+    }
+    auth
+      .updatePoll(pollId, title)
+      .then((result) => {
+        upsertRemotePoll(result?.poll || { id: pollId, title });
+        ui.modal = null;
+        ui.pollEditId = null;
+        ui.pollMenu = null;
+        render();
+      })
+      .catch(() => {
+        alert("약속 이름을 바꾸지 못했어요. 잠시 후 다시 시도해주세요.");
       });
     return;
   } else if (act === "find-availability") {
@@ -5760,14 +5891,16 @@ function onKey(event) {
     const renameWas = ui.renamingTabId;
     const menuWas = ui.docTabMenu;
     const ttMenuWas = ui.timetableMenu;
+    const pollMenuWas = ui.pollMenu;
     ui.findOpen = false;
     ui.commentBlockId = null;
     ui.renamingTabId = null;
     ui.docTabMenu = null;
     ui.timetableMenu = false;
+    ui.pollMenu = null;
     document.querySelectorAll(".note-color-pop").forEach((el) => el.classList.remove("open"));
     document.querySelector(".note-emoji-pop")?.classList.remove("open");
-    if (findWas || commentWas || renameWas || menuWas || ttMenuWas) render();
+    if (findWas || commentWas || renameWas || menuWas || ttMenuWas || pollMenuWas) render();
   }
   if (mod && event.key.toLowerCase() === "z" && !inField && document.querySelector(".note-doc")) {
     event.preventDefault();
@@ -5954,7 +6087,10 @@ async function boot() {
   auth.onAuth(() => {
     remoteProfiles = [];
     remotePolls = [];
+    deletedPollIds.clear();
+    bundleGen += 1;
     profilesReady = false;
+    profilesRequest = null;
     if (auth.user()) maybeSyncTimetable();
     render();
   });

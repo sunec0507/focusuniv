@@ -186,6 +186,14 @@ export async function createPoll(payload) {
   return postGroup("create-poll", payload);
 }
 
+export async function updatePoll(pollId, title) {
+  return postGroup("update-poll", { pollId, title });
+}
+
+export async function deletePoll(pollId) {
+  return postGroup("delete-poll", { pollId });
+}
+
 export async function markAvailability(pollId, slots, extra = {}) {
   return postGroup("mark-availability", { pollId, slots, ...extra });
 }
