@@ -60,6 +60,7 @@ const icons = {
   toc: "M5 6h14M5 12h10M5 18h14",
   highlighter: "M15.2 4.2 19.8 8.8 9 19.6H4.4v-4.6L15.2 4.2ZM13.4 6l4.6 4.6M4.4 19.6h4.6",
   removeFormat: "M5 19 10 5h2l5 14M7.2 13h7.6M16.5 16.5 21 21M21 16.5 16.5 21",
+  eraser: "M4 15.5 14.5 5l4.5 4.5-10.5 10.5H4v-4.5ZM8 20h12",
 };
 
 export function icon(name, size = 18) {

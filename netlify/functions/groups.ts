@@ -1,7 +1,7 @@
 import type { Config, Context } from "@netlify/functions";
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "../../db/index.ts";
-import { feedPosts, groups, meetingPolls, pollResponses, profiles } from "../../db/schema.ts";
+import { groups, meetingPolls, pollResponses, profiles } from "../../db/schema.ts";
 import { json, requireUser } from "./_shared/auth.ts";
 
 const MAX_MEMBERS = 8;
@@ -48,7 +48,6 @@ export default async (req: Request, _context: Context) => {
   if (req.method === "GET") {
     const all = await db.select().from(groups);
     const mine = all.filter((group) => isMember(group, user.id));
-    const posts = await db.select().from(feedPosts);
     const memberIds = [...new Set(mine.flatMap((group) => (Array.isArray(group.memberIds) ? group.memberIds : [])))];
     const memberProfiles = memberIds.length
       ? await db
@@ -70,7 +69,7 @@ export default async (req: Request, _context: Context) => {
       ...poll,
       responses: responses.filter((item) => item.pollId === poll.id),
     }));
-    return json({ groups: mine, posts, profiles: memberProfiles, polls: pollsWithResponses });
+    return json({ groups: mine, profiles: memberProfiles, polls: pollsWithResponses });
   }
 
   if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
@@ -100,21 +99,6 @@ export default async (req: Request, _context: Context) => {
     memberIds.push(user.id);
     await db.update(groups).set({ memberIds }).where(eq(groups.id, group.id));
     return json({ ok: true, group: { ...group, memberIds } });
-  }
-
-  if (body.action === "post") {
-    const post = {
-      id: `post-${Date.now()}`,
-      groupId: body.groupId,
-      authorId: user.id,
-      authorName: user.email ?? "member",
-      categoryId: body.categoryId || "personal",
-      imageUri: body.imageUri || "",
-      caption: body.caption || "",
-      reactions: [],
-    };
-    await db.insert(feedPosts).values(post);
-    return json({ post });
   }
 
   if (body.action === "sync-timetable") {

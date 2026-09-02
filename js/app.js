@@ -67,7 +67,14 @@ let pdfJsLoad = null;
 let pdfDocCache = { pageId: null, doc: null, numPages: 0 };
 let pdfMainTask = null;
 let pdfMountGen = 0;
+let pdfPaintGen = 0;
+let pdfLastFitWidth = 0;
 let pdfResizeObs = null;
+let pdfInkDrag = null;
+let pdfWheelOff = null;
+let pdfWheelAcc = 0;
+let pdfWheelIdle = 0;
+let pdfWheelArmed = true;
 
 const ui = {
   date: new Date(),
@@ -79,7 +86,6 @@ const ui = {
   authMode: "login",
   toast: null,
   auxMinutes: "30",
-  report: null,
   addingCategory: null,
   nightEnter: false,
   toolsOpen: false,
@@ -104,7 +110,10 @@ const ui = {
   renamingTabId: null,
   docTabsCollapsed: false,
   newPageParent: "",
+  newPageGroupId: "",
   pdfZoom: 1,
+  pdfInk: { mode: "off", color: "#111827", width: 3.5 },
+  pdfNotesOpen: false,
   noteQuery: "",
   notePageId: null,
   courseId: null,
@@ -113,6 +122,8 @@ const ui = {
   courseFormDraft: null,
   courseDeleteConfirm: false,
   timetableTab: "grid",
+  timetableId: "",
+  timetableMenu: false,
   gpaSemester: "",
   groupTab: "tasks",
   availLoading: false,
@@ -140,16 +151,47 @@ let profilesReady = false;
 let profilesRequest = null;
 const pollSaveSeq = {};
 
+const GROUP_TABS = ["tasks", "projects", "schedule"];
+
 function parseHash() {
   const hash = location.hash.replace(/^#/, "") || "/today";
   const [path] = hash.split("?");
   const parts = path.split("/").filter(Boolean);
   const name = parts[0] || "today";
-  return { name, id: parts[1] || "", extra: parts[2] || "" };
+  return { name, id: parts[1] || "", extra: parts[2] || "", pageId: parts[3] || "" };
 }
 
 function go(path) {
   location.hash = path.startsWith("#") ? path : `#${path}`;
+}
+
+function inheritedGroupId(page) {
+  let cursor = page;
+  const seen = new Set();
+  while (cursor && !seen.has(cursor.id)) {
+    seen.add(cursor.id);
+    if (cursor.groupId) return cursor.groupId;
+    cursor = cursor.parentId ? store.projectById(cursor.parentId) : null;
+  }
+  return undefined;
+}
+
+function groupPath(groupId, tab = "tasks", pageId = "") {
+  if (!groupId) return "/groups";
+  if (tab === "projects" && pageId) return `/groups/${groupId}/projects/${pageId}`;
+  if (tab === "projects") return `/groups/${groupId}/projects`;
+  if (tab === "schedule") return `/groups/${groupId}/schedule`;
+  return `/groups/${groupId}`;
+}
+
+function groupRoute(hash = parseHash()) {
+  if (hash.name !== "groups" || !hash.id) return null;
+  const tab = GROUP_TABS.includes(hash.extra) ? hash.extra : "tasks";
+  return {
+    groupId: hash.id,
+    tab,
+    pageId: tab === "projects" ? hash.pageId : "",
+  };
 }
 
 function todayKey() {
@@ -333,7 +375,7 @@ function maybeSyncTimetable({ empty = false, refresh = false } = {}) {
   const on = Boolean(store.getState().settings?.shareTimetableWithGroups);
   if (!on && !empty) return;
   auth
-    .syncTimetable(on ? store.getState().courses || [] : [])
+    .syncTimetable(on ? store.primaryCourses() : [])
     .then(() => {
       if (refresh) refreshGroupBundle();
     })
@@ -733,17 +775,73 @@ function viewCalendar() {
 
 const TT_START_HOUR = 8;
 const TT_END_HOUR = 22;
-const TT_ROW = 34;
+const TT_ROW = 48;
+
+function timetableDayFromDate(date) {
+  const js = date instanceof Date ? date.getDay() : new Date().getDay();
+  return js === 0 ? 7 : js;
+}
+
+function weekdayLabel(date) {
+  return ["일요일", "월요일", "화요일", "수요일", "목요일", "금요일", "토요일"][date instanceof Date ? date.getDay() : new Date().getDay()];
+}
+
+function todayCourseRows(date) {
+  const day = timetableDayFromDate(date);
+  const rows = [];
+  for (const course of store.primaryCourses()) {
+    for (const slot of store.courseSlots(course)) {
+      if (Number(slot.day) !== day) continue;
+      rows.push({
+        course,
+        slot,
+        start: timeToMinutes(slot.startTime),
+        end: timeToMinutes(slot.endTime),
+      });
+    }
+  }
+  rows.sort((a, b) => a.start - b.start || a.end - b.end);
+  return rows;
+}
 
 function viewTodaySchedule() {
+  const date = ui.date instanceof Date ? ui.date : new Date();
+  const isToday = dateKeyFrom(date) === todayKey();
+  const rows = todayCourseRows(date);
+  const now = new Date();
+  const nowMin = isToday ? now.getHours() * 60 + now.getMinutes() : -1;
+  const currentIdx = rows.findIndex((row) => nowMin >= row.start && nowMin < row.end);
+  const nextIdx = currentIdx < 0 ? rows.findIndex((row) => row.start > nowMin) : -1;
+  const title = isToday ? "오늘 시간표" : `${weekdayLabel(date)} 시간표`;
+  const body = rows.length
+    ? `<div class="today-sched-list">
+        ${rows
+          .map((row, i) => {
+            const meta = [row.course.room, row.course.professor].filter(Boolean).join(" · ");
+            const mark = i === currentIdx ? "진행" : i === nextIdx ? "다음" : "";
+            return `<div class="today-sched-row ${i === currentIdx ? "now" : ""} ${i === nextIdx ? "next" : ""}">
+              <span class="today-sched-time">
+                <b>${escapeHtml(row.slot.startTime)}</b>
+                <span>${escapeHtml(row.slot.endTime)}</span>
+              </span>
+              <span class="dot" style="background:${escapeHtml(row.course.color || "#2563eb")}"></span>
+              <div class="today-sched-copy">
+                <div class="task-title">${escapeHtml(row.course.title || "수업")}${mark ? `<span class="due-chip">${mark}</span>` : ""}</div>
+                ${meta ? `<div class="task-meta">${escapeHtml(meta)}</div>` : ""}
+              </div>
+            </div>`;
+          })
+          .join("")}
+      </div>`
+    : `<div class="today-sched-empty">이 요일에 등록된 수업이 없습니다.</div>`;
   return `
     <aside class="today-split-schedule">
       <div class="today-sched-card">
         <div class="today-sched-head">
-          <b>시간표</b>
+          <b>${escapeHtml(title)}</b>
           <a href="#/timetable">시간표 탭에서 관리</a>
         </div>
-        ${viewTimetableGrid()}
+        ${body}
       </div>
     </aside>`;
 }
@@ -775,8 +873,9 @@ function draftSlotsOverlap(slots) {
 }
 
 function timetableDays(courses) {
-  const maxDay = courses.length
-    ? Math.max(1, ...courses.flatMap((course) => store.courseSlots(course).map((slot) => Number(slot.day) || 1)))
+  const list = Array.isArray(courses) ? courses : [];
+  const maxDay = list.length
+    ? Math.max(1, ...list.flatMap((course) => store.courseSlots(course).map((slot) => Number(slot.day) || 1)))
     : 5;
   const dayCount = Math.max(5, maxDay);
   const dayLabels = ["월", "화", "수", "목", "금", "토", "일"].slice(0, dayCount);
@@ -834,6 +933,50 @@ function syncCourseSlotDraft(el) {
   );
 }
 
+function activeTimetableId() {
+  const list = store.getTimetables();
+  const id = ui.timetableId || store.getState().primaryTimetableId;
+  return list.some((item) => item.id === id) ? id : list[0]?.id || "";
+}
+
+function timetableSwitcherHtml() {
+  const list = store.getTimetables();
+  const active = activeTimetableId();
+  const primary = store.getState().primaryTimetableId;
+  const canDelete = list.length > 1;
+  const isPrimary = active === primary;
+  const menuOpen = Boolean(ui.timetableMenu);
+  return `
+    <div class="tt-switch">
+      <span class="tt-switch-label">시간표</span>
+      <div class="tt-chip-row">
+        ${list
+          .map(
+            (item) =>
+              `<button type="button" class="tt-chip ${item.id === active ? "on" : ""}" data-act="select-timetable" data-id="${item.id}">
+                ${escapeHtml(item.name)}
+                ${item.id === primary ? `<span class="tt-chip-mark">대표</span>` : ""}
+              </button>`,
+          )
+          .join("")}
+        <button type="button" class="tt-chip-add" data-act="add-timetable" aria-label="시간표 추가">${icon("plus", 14)}</button>
+      </div>
+      <div class="tt-switch-more">
+        <button type="button" class="icon-btn ${menuOpen ? "on" : ""}" data-act="tt-menu" aria-label="시간표 편집" aria-expanded="${menuOpen ? "true" : "false"}">${icon("moreVertical", 16)}</button>
+        ${
+          menuOpen
+            ? `<div class="tt-switch-pop">
+                ${isPrimary ? `<p class="tt-switch-note">그룹·오늘 할 일에 보이는 대표 시간표입니다</p>` : ""}
+                <button type="button" data-act="rename-timetable" data-id="${active}">이름 변경</button>
+                ${isPrimary ? "" : `<button type="button" data-act="set-primary-timetable" data-id="${active}">대표로 설정</button>`}
+                <button type="button" class="danger-text" data-act="del-timetable" data-id="${active}" ${canDelete ? "" : "disabled"}>삭제</button>
+              </div>`
+            : ""
+        }
+      </div>
+    </div>`;
+}
+
 function viewTimetable() {
   const tab = ui.timetableTab === "gpa" ? "gpa" : "grid";
   const extra =
@@ -846,66 +989,71 @@ function viewTimetable() {
       <button type="button" class="gpa-tab ${tab === "grid" ? "on" : ""}" data-act="tt-tab" data-tab="grid">주간 시간표</button>
       <button type="button" class="gpa-tab ${tab === "gpa" ? "on" : ""}" data-act="tt-tab" data-tab="gpa">학점 계산기</button>
     </div>
-    ${tab === "gpa" ? viewGpa() : viewTimetableGrid()}`;
+    ${tab === "gpa" ? viewGpa() : `${timetableSwitcherHtml()}${viewTimetableGrid(store.coursesIn(activeTimetableId()))}`}`;
 }
 
-function viewTimetableGrid() {
-  const courses = store.getState().courses || [];
+function viewTimetableGrid(courses = []) {
   const { dayCount, dayLabels } = timetableDays(courses);
   const hours = Array.from({ length: TT_END_HOUR - TT_START_HOUR + 1 }, (_, i) => i + TT_START_HOUR);
-  const gridHeight = hours.length * TT_ROW;
+  const gridHeight = (TT_END_HOUR - TT_START_HOUR) * TT_ROW;
+  const todayDay = timetableDayFromDate(new Date());
+  const now = new Date();
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+  const showNow = nowMin > TT_START_HOUR * 60 && nowMin < TT_END_HOUR * 60;
+  const nowTop = ((nowMin - TT_START_HOUR * 60) / 60) * TT_ROW;
+  const startBound = TT_START_HOUR * 60;
+  const endBound = TT_END_HOUR * 60;
   return `
-    <div class="tt-wrap" style="--tt-days:${dayCount}">
+    <div class="tt-wrap" style="--tt-days:${dayCount};--tt-row:${TT_ROW}px;--tt-gutter:48px">
       <div class="tt-days">
-        <div class="tt-day-head"></div>
-        ${dayLabels.map((label) => `<div class="tt-day-head">${label}</div>`).join("")}
+        <div class="tt-day-head gutter" aria-hidden="true"></div>
+        ${dayLabels
+          .map(
+            (label, i) =>
+              `<div class="tt-day-head ${i + 1 === todayDay ? "today" : ""}">${label}</div>`,
+          )
+          .join("")}
       </div>
       <div class="tt-grid" style="height:${gridHeight}px" aria-label="주간 시간표">
         ${hours
           .map(
-            (hour) =>
-              `<div class="tt-hour" style="top:${(hour - TT_START_HOUR) * TT_ROW}px"><span>${String(hour).padStart(2, "0")}</span><i></i></div>`,
+            (hour, i) =>
+              `<div class="tt-hour${i === 0 ? " first" : ""}${i === hours.length - 1 ? " end" : ""}" style="top:${(hour - TT_START_HOUR) * TT_ROW}px"><span>${String(hour).padStart(2, "0")}</span></div>`,
           )
           .join("")}
-        <div class="tt-plot" style="height:${gridHeight}px">
-          ${hours
-            .slice(0, -1)
-            .flatMap((hour) => {
-              const halfH = TT_ROW / 2;
-              return [0, 1].flatMap((half) => {
-                const idx = (hour - TT_START_HOUR) * 2 + half;
-                const odd = idx % 2 === 1 ? " odd" : "";
-                return Array.from({ length: dayCount }, (_, day) => {
-                  return `<div class="tt-cell${odd}" style="top:${(hour - TT_START_HOUR) * TT_ROW + half * halfH}px;left:${(day / dayCount) * 100}%;width:${(1 / dayCount) * 100}%;height:${halfH}px"></div>`;
-                });
-              });
-            })
-            .join("")}
-          ${hours
-            .slice(0, -1)
+        <div class="tt-plot">
+          ${dayLabels
             .map(
-              (hour) =>
-                `<div class="tt-half-hour" style="top:${(hour - TT_START_HOUR) * TT_ROW + TT_ROW / 2}px"><i></i></div>`,
+              (_, i) =>
+                `<div class="tt-col${i + 1 === todayDay ? " today" : ""}${i === dayCount - 1 ? " last" : ""}" style="left:${(i / dayCount) * 100}%;width:${(1 / dayCount) * 100}%"></div>`,
             )
             .join("")}
-          ${Array.from({ length: dayCount }, (_, i) => `<span class="tt-col" style="left:${(i / dayCount) * 100}%"></span>`).join("")}
           ${courses
             .flatMap((course) =>
               store.courseSlots(course).map((slot) => {
-                const start = timeToMinutes(slot.startTime);
-                const end = timeToMinutes(slot.endTime);
-                const top = ((start - TT_START_HOUR * 60) / 60) * TT_ROW;
-                const height = Math.max(46, ((end - start) / 60) * TT_ROW);
-                const left = ((Number(slot.day) - 1) / dayCount) * 100;
+                const day = Number(slot.day) || 1;
+                if (day < 1 || day > dayCount) return "";
+                const start = Math.max(startBound, timeToMinutes(slot.startTime));
+                const end = Math.min(endBound, timeToMinutes(slot.endTime));
+                if (end <= start) return "";
+                const rawH = ((end - start) / 60) * TT_ROW;
+                const height = Math.max(22, rawH - 6);
+                const top = ((start - startBound) / 60) * TT_ROW + 3;
+                const left = ((day - 1) / dayCount) * 100;
                 const width = (1 / dayCount) * 100;
-                return `<div class="tt-block" data-act="edit-course" data-id="${course.id}"
-                  style="top:${top}px;left:${left}%;width:${width}%;height:${height}px;background:${course.color || "#2563eb"}">
-                  <div class="tt-name">${escapeHtml(course.title)}</div>
-                  ${course.room ? `<div class="tt-room">${escapeHtml(course.room)}</div>` : ""}
-                </div>`;
+                const color = /^#[0-9A-Fa-f]{6}$/.test(String(course.color || "")) ? course.color : "#2563eb";
+                const meta = [course.room, course.professor].filter(Boolean).join(" · ");
+                const short = height < 40 ? " short" : "";
+                return `<button type="button" class="tt-block${short}" data-act="edit-course" data-id="${course.id}"
+                  style="top:${top}px;height:${height}px;left:calc(${left}% + 5px);width:calc(${width}% - 10px);--tt-color:${color}"
+                  title="${escapeHtml([course.title, slot.startTime, slot.endTime, meta].filter(Boolean).join(" · "))}">
+                  <span class="tt-name">${escapeHtml(course.title || "수업")}</span>
+                  ${meta ? `<span class="tt-room">${escapeHtml(meta)}</span>` : ""}
+                </button>`;
               }),
             )
             .join("")}
+          ${showNow ? `<div class="tt-now" style="top:${nowTop}px" aria-hidden="true"></div>` : ""}
         </div>
       </div>
     </div>`;
@@ -1876,17 +2024,13 @@ function placeNotePop(pop, anchor) {
 }
 
 function noteCrumbsHtml(page, scope) {
-  const personal = !scope;
   const crumbs = page ? pageAncestors(page) : [];
-  const parts = [];
-  if (personal) {
-    parts.push(
-      `<button type="button" class="folder-crumb ${page ? "" : "on"}" data-act="open-projects-root">홈</button>`,
-    );
-  }
+  const parts = [
+    `<button type="button" class="folder-crumb ${page ? "" : "on"}" data-act="open-projects-root">홈</button>`,
+  ];
   crumbs.forEach((item, index) => {
     const last = index === crumbs.length - 1;
-    if (personal || index > 0) parts.push(`<span class="folder-crumb-sep" aria-hidden="true">/</span>`);
+    parts.push(`<span class="folder-crumb-sep" aria-hidden="true">/</span>`);
     parts.push(
       last
         ? `<span class="folder-crumb on">${escapeHtml(item.name || "제목 없음")}</span>`
@@ -1934,6 +2078,7 @@ function folderCardsHtml(parentId, scope) {
 
 function folderPaneHtml(page, scope, parentAttr) {
   const parent = parentAttr ? `data-parent="${parentAttr}"` : "";
+  const group = scope ? `data-group="${scope}"` : "";
   return `
     <div class="folder-pane">
       ${noteCrumbsHtml(page, scope)}
@@ -1947,23 +2092,30 @@ function folderPaneHtml(page, scope, parentAttr) {
       }
       <label class="note-search">${icon("search", 14)}<input data-act="note-query" value="${escapeHtml(ui.noteQuery)}" placeholder="폴더와 페이지 검색"></label>
       <div class="folder-actions">
-        <button class="ghost" data-act="new-folder" ${parent}>${icon("folder", 14)} 새 폴더</button>
-        <button class="primary" data-act="new-page" ${parent}>${icon("plus", 14)} 새 페이지</button>
+        <button class="ghost" data-act="new-folder" ${parent} ${group}>${icon("folder", 14)} 새 폴더</button>
+        <button class="primary" data-act="new-page" ${parent} ${group}>${icon("plus", 14)} 새 페이지</button>
       </div>
       <div data-folder-body>${folderBodyHtml(page, scope)}</div>
     </div>`;
 }
 
+const PDF_INK_COLORS = ["#111827", "#dc2626", "#2563eb", "#16a34a", "#ca8a04"];
+const PDF_INK_WIDTHS = [2, 3.5, 6];
+
 function pdfViewerHtml(page, scope) {
   const n = Math.max(1, Number(page.pdfPage) || 1);
   const zoom = Math.round((Number(ui.pdfZoom) || 1) * 100);
+  const ink = ui.pdfInk || { mode: "off", color: "#111827", width: 3.5 };
+  const notesOpen = Boolean(ui.pdfNotesOpen);
   return `
-    <div class="pdf-view">
+    <div class="pdf-view ${notesOpen ? "notes-open" : ""}">
       ${noteCrumbsHtml(page, scope)}
       <div class="folder-head pdf-head">
         <input class="page-name folder-name" data-act="rename-page" data-id="${page.id}" value="${escapeHtml(page.name)}" placeholder="제목">
+        <button type="button" class="ghost pdf-notes-toggle ${notesOpen ? "on" : ""}" data-act="toggle-pdf-notes" aria-expanded="${notesOpen ? "true" : "false"}" aria-controls="pdf-notes-panel">${icon("comment", 16)} 메모</button>
       </div>
-      <div class="pdf-viewer" data-pdf-viewer data-id="${page.id}">
+      <div class="pdf-workspace ${notesOpen ? "notes-open" : ""}">
+      <div class="pdf-viewer ${ink.mode !== "off" ? "inking" : ""}" data-pdf-viewer data-id="${page.id}">
         <aside class="pdf-thumbs" data-pdf-thumbs aria-label="페이지 목록"></aside>
         <section class="pdf-stage">
           <div class="pdf-tools">
@@ -1977,40 +2129,66 @@ function pdfViewerHtml(page, scope) {
             <button type="button" class="ghost" data-act="pdf-zoom-out" aria-label="축소">${icon("minus", 14)}</button>
             <span data-pdf-zoom>${zoom}%</span>
             <button type="button" class="ghost" data-act="pdf-zoom-in" aria-label="확대">${icon("plus", 14)}</button>
+            <span class="pdf-tools-gap"></span>
+            <button type="button" class="ghost ${ink.mode === "pen" ? "on" : ""}" data-act="pdf-ink" aria-label="펜">${icon("pencil", 14)}</button>
+            <button type="button" class="ghost ${ink.mode === "text" ? "on" : ""}" data-act="pdf-ink-text" aria-label="텍스트">${icon("aa", 14)}</button>
+            <button type="button" class="ghost ${ink.mode === "erase" ? "on" : ""}" data-act="pdf-ink-erase" aria-label="지우개">${icon("eraser", 14)}</button>
+            <span class="pdf-ink-colors" role="group" aria-label="펜 색">
+              ${PDF_INK_COLORS.map(
+                (color) =>
+                  `<button type="button" class="pdf-ink-swatch ${ink.color.toLowerCase() === color ? "on" : ""}" data-act="pdf-ink-color" data-color="${color}" style="background:${color}" aria-label="색 ${color}"></button>`,
+              ).join("")}
+            </span>
+            <span class="pdf-ink-widths" role="group" aria-label="펜 굵기">
+              ${PDF_INK_WIDTHS.map(
+                (width) =>
+                  `<button type="button" class="pdf-ink-width ${Number(ink.width) === width ? "on" : ""}" data-act="pdf-ink-width" data-width="${width}" aria-label="굵기 ${width}">
+                    <i style="width:${4 + width}px;height:${4 + width}px"></i>
+                  </button>`,
+              ).join("")}
+            </span>
           </div>
           <div class="pdf-main" data-pdf-main>
-            <canvas data-pdf-canvas></canvas>
+            <div class="pdf-page" data-pdf-page>
+              <canvas data-pdf-canvas></canvas>
+              <canvas data-pdf-ink></canvas>
+              <div class="pdf-texts" data-pdf-texts></div>
+            </div>
           </div>
           <div class="pdf-fallback" data-pdf-fallback hidden>
             <iframe title="${escapeHtml(page.pdfName || page.name || "PDF")}"></iframe>
           </div>
         </section>
       </div>
+      <aside class="pdf-notes" data-pdf-notes id="pdf-notes-panel" ${notesOpen ? "" : "hidden"}>
+        <div class="pdf-notes-head">
+          <b>메모</b>
+          <span>이 PDF에 대한 정리 · 필기와는 별도입니다</span>
+        </div>
+        <textarea class="field pdf-notes-input" data-act="pdf-notes" data-id="${page.id}" placeholder="요약, 질문, 할 말을 적어 두세요">${escapeHtml(page.pdfNotes || "")}</textarea>
+      </aside>
+      </div>
     </div>`;
 }
 
-function viewProjects(pageId) {
-  const pages = store.getState().projects;
-  const route = parseHash();
-  const desk = route.name === "focus";
-  const atPersonalRoot = route.name === "projects" && !pageId;
-  let page = pageId ? pages.find((item) => item.id === pageId) : null;
-  if (atPersonalRoot) page = null;
-  else if (!page && desk) page = pages.find((item) => item.id === ui.notePageId && !item.groupId) || null;
-  else if (!page) page = pages.find((item) => item.id === ui.notePageId) || null;
-  if (desk && page?.groupId) page = null;
-  const scope = page?.groupId || null;
-  ui.notePageId = page?.id || null;
-  resetNoteHistory(page?.id || null, page?.activeTabId || null);
-  const parentAttr = creationParentId(page) || "";
+function projectPageExtras(page, { parentAttr = "", groupId = "" } = {}) {
   const parentBtn = parentAttr ? `data-parent="${parentAttr}"` : "";
-  const extras = `${
+  const gid = groupId || page?.groupId || "";
+  const groupBtn = gid ? `data-group="${gid}"` : "";
+  return `${
     page?.groupId
       ? `<button class="ghost" data-act="meet-ai" data-id="${page.id}">${icon("sparkle", 14)} AI로 정리</button>`
       : ""
-  }<button class="ghost" data-act="new-folder" ${parentBtn}>새 폴더</button><button class="primary" data-act="new-page" ${parentBtn}>${icon("plus", 14)} 새 페이지</button>`;
+  }<button class="ghost" data-act="new-folder" ${parentBtn} ${groupBtn}>새 폴더</button><button class="primary" data-act="new-page" ${parentBtn} ${groupBtn}>${icon("plus", 14)} 새 페이지</button>`;
+}
+
+function projectWorkspaceHtml(page, { desk = false, scope = null, showTop = true } = {}) {
+  ui.notePageId = page?.id || null;
+  resetNoteHistory(page?.id || null, page?.activeTabId || null);
+  const parentAttr = creationParentId(page) || "";
+  const extras = projectPageExtras(page, { parentAttr, groupId: scope || "" });
   const browsingFolder = !page || isFolderItem(page);
-  const projectTop = (sub) => (desk ? "" : top("프로젝트", sub, extras, { titleAct: "open-projects-root" }));
+  const projectTop = (sub) => (desk || !showTop ? "" : top("프로젝트", sub, extras, { titleAct: "open-projects-root" }));
   if (browsingFolder) {
     return `
     ${projectTop("폴더에 페이지를 모아 둡니다.")}
@@ -2041,6 +2219,19 @@ function viewProjects(pageId) {
     </div>`;
 }
 
+function viewProjects(pageId) {
+  const pages = store.getState().projects;
+  const route = parseHash();
+  const desk = route.name === "focus";
+  const atPersonalRoot = route.name === "projects" && !pageId;
+  let page = pageId ? pages.find((item) => item.id === pageId) : null;
+  if (atPersonalRoot) page = null;
+  else if (!page && desk) page = pages.find((item) => item.id === ui.notePageId && !item.groupId) || null;
+  else if (!page) page = pages.find((item) => item.id === ui.notePageId && !item.groupId) || null;
+  if (page?.groupId) page = null;
+  return projectWorkspaceHtml(page, { desk, scope: null, showTop: true });
+}
+
 function viewGroups(groupId) {
   ensureRemoteProfiles();
   const s = store.getState();
@@ -2062,16 +2253,24 @@ function viewGroups(groupId) {
         }
       </div>`;
   }
-  const tab = ["tasks", "projects", "feed", "schedule"].includes(ui.groupTab) ? ui.groupTab : "tasks";
+  const ctx = groupRoute();
+  const tab = ctx?.groupId === group.id && GROUP_TABS.includes(ctx.tab) ? ctx.tab : "tasks";
+  ui.groupTab = tab;
+  const pageId = tab === "projects" ? ctx?.pageId || "" : "";
+  const projectPage = pageId ? store.projectById(pageId) : null;
+  const scopedPage = inheritedGroupId(projectPage) === group.id ? projectPage : null;
+  const parentAttr = creationParentId(scopedPage) || "";
+  const extras = `${
+    tab === "projects" ? projectPageExtras(scopedPage, { parentAttr, groupId: group.id }) : ""
+  }<button class="ghost" data-act="leave-group" data-id="${group.id}">나가기</button>`;
   return `
-    ${top(group.name, `팀플 그룹 · 초대 코드 ${group.inviteCode}`, `<button class="ghost" data-act="leave-group" data-id="${group.id}">나가기</button>`)}
+    ${top(group.name, `팀플 그룹 · 초대 코드 ${group.inviteCode}`, extras)}
     <div class="gpa-tabs">
-      <button type="button" class="gpa-tab ${tab === "tasks" ? "on" : ""}" data-act="group-tab" data-tab="tasks">할 일</button>
-      <button type="button" class="gpa-tab ${tab === "projects" ? "on" : ""}" data-act="group-tab" data-tab="projects">프로젝트</button>
-      <button type="button" class="gpa-tab ${tab === "feed" ? "on" : ""}" data-act="group-tab" data-tab="feed">인증</button>
-      <button type="button" class="gpa-tab ${tab === "schedule" ? "on" : ""}" data-act="group-tab" data-tab="schedule">일정</button>
+      <button type="button" class="gpa-tab ${tab === "tasks" ? "on" : ""}" data-act="group-tab" data-tab="tasks" data-group="${group.id}">할 일</button>
+      <button type="button" class="gpa-tab ${tab === "projects" ? "on" : ""}" data-act="group-tab" data-tab="projects" data-group="${group.id}">프로젝트</button>
+      <button type="button" class="gpa-tab ${tab === "schedule" ? "on" : ""}" data-act="group-tab" data-tab="schedule" data-group="${group.id}">일정</button>
     </div>
-    ${tab === "projects" ? viewGroupProjects(group) : tab === "feed" ? viewGroupFeed(group) : tab === "schedule" ? viewGroupSchedule(group) : viewGroupTasks(group)}`;
+    ${tab === "projects" ? viewGroupProjects(group, scopedPage) : tab === "schedule" ? viewGroupSchedule(group) : viewGroupTasks(group)}`;
 }
 
 function viewGroupTasks(group) {
@@ -2095,56 +2294,8 @@ function viewGroupTasks(group) {
     </div>`;
 }
 
-function viewGroupProjects(group) {
-  const pages = store.projectsInGroup(group.id);
-  return `
-    <form class="composer" data-act="add-group-page">
-      <input type="hidden" name="groupId" value="${group.id}">
-      <input class="field" name="name" placeholder="프로젝트 이름" required>
-      <button class="primary" type="submit">프로젝트 추가</button>
-    </form>
-    <p class="page-date">이 그룹 안에서만 보이는 프로젝트입니다.</p>
-    <div class="list" style="margin-top:12px">
-      ${
-        pages.length
-          ? pages
-              .map(
-                (page) =>
-                  `<a class="task" href="#/projects/${page.id}"><span class="page-glyph" style="background:${page.color || "#2563eb"}">${escapeHtml(page.icon || "N")}</span><div><div class="task-title">${escapeHtml(page.name)}<span class="team-badge">${escapeHtml(group.name)}</span></div><div class="task-meta">블록 에디터에서 편집</div></div></a>`,
-              )
-              .join("")
-          : `<div class="empty">아직 팀 프로젝트가 없습니다.</div>`
-      }
-    </div>`;
-}
-
-function viewGroupFeed(group) {
-  const posts = store.getState().posts.filter((post) => post.groupId === group.id);
-  return `
-    <form class="composer" data-act="add-post">
-      <input class="field" name="caption" placeholder="사진과 함께 남길 메모">
-      <button class="primary" type="submit">올리기</button>
-      <input type="hidden" name="groupId" value="${group.id}">
-    </form>
-    <input id="post-file" type="file" accept="image/*" class="field" style="margin-top:8px">
-    <div class="feed" style="margin-top:16px">
-      ${
-        posts.length
-          ? posts
-              .map(
-                (post) => `
-            <article class="card-photo">
-              ${post.imageUri ? `<img src="${post.imageUri}" alt="">` : ""}
-              <div class="cap">${escapeHtml(post.caption || "")}</div>
-              <div class="reacts">
-                ${["👍", "🔥", "💪"].map((emo) => `<button class="ghost" data-act="react" data-id="${post.id}" data-emo="${emo}">${emo}</button>`).join("")}
-              </div>
-            </article>`,
-              )
-              .join("")
-          : `<div class="empty">아직 피드가 없습니다.</div>`
-      }
-    </div>`;
+function viewGroupProjects(group, page) {
+  return projectWorkspaceHtml(page || null, { desk: false, scope: group.id, showTop: false });
 }
 
 function viewGroupSchedule(group) {
@@ -2444,7 +2595,6 @@ function applyAppearance() {
 
 function notifyAllowed(kind) {
   const notes = store.getState().settings?.notifications || {};
-  if (kind === "daily") return notes.dailyReport !== false;
   if (kind === "group") return notes.groupUpdates !== false;
   return true;
 }
@@ -2512,8 +2662,8 @@ function settingsPrivacy() {
       <label class="set-check">
         <input type="checkbox" data-act="set-share-timetable" ${share ? "checked" : ""}>
         <span>
-          <b>내 시간표를 팀플 그룹에 공개</b>
-          <small>요일과 바쁜 시간만 공유됩니다. 과목명·강의실은 보내지 않습니다.</small>
+          <b>대표 시간표를 팀플 그룹에 공개</b>
+          <small>대표로 지정한 시간표의 요일과 바쁜 시간만 공유됩니다. 과목명·강의실은 보내지 않습니다.</small>
         </span>
       </label>
     </div>`;
@@ -2532,10 +2682,6 @@ function settingsPermissions() {
 function settingsNotifications() {
   const notes = store.getState().settings?.notifications || {};
   return `
-    <label class="set-check">
-      <input type="checkbox" data-act="set-notify" data-key="dailyReport" ${notes.dailyReport !== false ? "checked" : ""}>
-      <span><b>AI 코치 일일 리포트 알림</b></span>
-    </label>
     <label class="set-check">
       <input type="checkbox" data-act="set-notify" data-key="groupUpdates" ${notes.groupUpdates !== false ? "checked" : ""}>
       <span><b>그룹 활동 알림</b></span>
@@ -2880,7 +3026,7 @@ function modalHtml() {
     </div></div>`;
   }
   if (ui.modal === "course") {
-    const course = (store.getState().courses || []).find((item) => item.id === ui.courseId);
+    const course = store.courseById(ui.courseId);
     const tiles = courseColorTiles();
     const picked = ui.courseColorDraft || course?.color || tiles[0]?.value || "#0EA5E9";
     const pickerValue = /^#[0-9A-Fa-f]{6}$/.test(picked) ? picked : "#0EA5E9";
@@ -2974,20 +3120,6 @@ function modalHtml() {
       </form>
     </div></div>`;
   }
-  if (ui.modal === "report" && ui.report) {
-    const report = ui.report;
-    return `<div class="modal-back" data-act="close-modal"><div class="modal" data-stop="1">
-      <h2>${escapeHtml(report.title || "효율 리포트")}</h2>
-      <p><b>${escapeHtml(report.headline || "")}</b></p>
-      <p>${escapeHtml(report.body || "")}</p>
-      ${
-        report.leftover?.length
-          ? `<p class="page-date">남긴 일: ${report.leftover.map(escapeHtml).join(", ")}</p>`
-          : ""
-      }
-      <button class="primary" data-act="close-modal">확인</button>
-    </div></div>`;
-  }
   if (ui.modal === "new-page-choice") {
     return `<div class="modal-back" data-act="close-modal"><div class="modal new-page-choice" data-stop="1">
       <h2>새 페이지</h2>
@@ -3027,7 +3159,8 @@ function layout(active, body, desk = false) {
 
 export function render() {
   applyAppearance();
-  const { name, id } = parseHash();
+  const route = parseHash();
+  const { name, id } = route;
   const root = document.getElementById("app");
   let html = "";
   if (name === "focus") html = layout("focus", viewFocus(id || "today"), true);
@@ -3039,7 +3172,16 @@ export function render() {
   }
   else if (name === "calendar") html = layout("calendar", viewCalendar());
   else if (name === "timetable") html = layout("timetable", viewTimetable());
-  else if (name === "projects") html = layout("projects", viewProjects(id));
+  else if (name === "projects") {
+    const page = id ? store.projectById(id) : null;
+    const gid = inheritedGroupId(page);
+    if (gid) {
+      go(groupPath(gid, "projects", id));
+      html = layout("groups", viewGroups(gid));
+    } else {
+      html = layout("projects", viewProjects(id));
+    }
+  }
   else if (name === "groups") html = layout("groups", viewGroups(id));
   else if (name === "profile") html = layout("profile", viewProfile());
   else if (name === "settings") html = layout("settings", viewSettings());
@@ -3072,7 +3214,7 @@ function showToast(note, kind) {
     stack.className = "toast-stack";
     document.body.appendChild(stack);
   }
-  stack.innerHTML = `<button class="toast" data-act="${note.reportId || (note.id && note.id !== "") ? "open-note" : "dismiss-toast"}" data-id="${note.id || ""}">
+  stack.innerHTML = `<button class="toast" data-act="${note.id ? "open-note" : "dismiss-toast"}" data-id="${note.id || ""}">
     <b>${escapeHtml(note.title)}</b><span>${escapeHtml(note.body)}</span></button>`;
 }
 
@@ -3127,24 +3269,6 @@ function playTask(taskId) {
 function shiftDate(which, amount) {
   if (which === "timeline") ui.timeline = addDays(ui.timeline, amount);
   else ui.date = addDays(ui.date, amount);
-}
-
-async function maybeDailyCoach() {
-  const rolled = store.markVisit(todayKey());
-  if (!rolled) return;
-  if (store.getState().dailyReports.some((item) => item.date === rolled)) return;
-  const analysis = store.analyzeDay(rolled);
-  let copy = store.localDailyCopy(analysis);
-  try {
-    const remote = await auth.askCoach({ action: "daily", analysis });
-    if (remote?.headline) copy = { ...copy, ...remote };
-  } catch {
-    /* local heuristic */
-  }
-  store.ingestDailyReport(rolled, copy);
-  const note = store.getState().notifications[0];
-  if (notifyAllowed("daily")) ui.toast = note;
-  ui.panel = false;
 }
 
 function pagePlainText(page) {
@@ -3279,33 +3403,13 @@ async function runFindAvailability(form) {
   render();
 }
 
-function openReport(noteId) {
-  const s = store.getState();
-  const note = s.notifications.find((item) => item.id === noteId);
-  const report = s.dailyReports.find((item) => item.id === note?.reportId) || s.dailyReports[0];
-  ui.report = report;
-  ui.modal = "report";
-  ui.panel = false;
-  store.markNotificationsRead();
-  render();
-}
-
 function currentPageId() {
-  const { name, id } = parseHash();
-  if (name === "projects" && id) return id;
+  const route = parseHash();
+  if (route.name === "projects" && route.id) return route.id;
+  const ctx = groupRoute(route);
+  if (ctx?.pageId) return ctx.pageId;
   if (ui.notePageId) return ui.notePageId;
   return null;
-}
-
-function inheritedGroupId(page) {
-  let cursor = page;
-  const seen = new Set();
-  while (cursor && !seen.has(cursor.id)) {
-    seen.add(cursor.id);
-    if (cursor.groupId) return cursor.groupId;
-    cursor = cursor.parentId ? store.projectById(cursor.parentId) : null;
-  }
-  return undefined;
 }
 
 function placeCaretEnd(el) {
@@ -3621,37 +3725,50 @@ function pickNoteFile(existingId) {
   input.click();
 }
 
-function pickNotePdf(existingId) {
+function pickPdfFile(onFile) {
   const input = document.createElement("input");
   input.type = "file";
   input.accept = "application/pdf,.pdf";
-  input.onchange = () => attachNoteFile(input.files?.[0], existingId);
+  input.onchange = () => onFile(input.files?.[0]);
   input.click();
 }
 
-function newPageParentId() {
-  const current = store.projectById(ui.notePageId || currentPageId());
-  return ui.newPageParent || creationParentId(current) || null;
+function pickNotePdf(existingId) {
+  pickPdfFile((file) => attachNoteFile(file, existingId));
 }
 
-function createBlankPage() {
+function newPageParentId() {
+  if (ui.newPageParent) return ui.newPageParent;
+  const current = store.projectById(ui.notePageId || currentPageId());
+  const wanted = ui.newPageGroupId || groupRoute()?.groupId;
+  if (wanted && inheritedGroupId(current) !== wanted) return null;
+  return creationParentId(current) || null;
+}
+
+function pageCreationGroupId() {
   const parent = newPageParentId();
   const parentPage = parent ? store.projectById(parent) : null;
   const current = store.projectById(ui.notePageId || currentPageId());
+  return (
+    ui.newPageGroupId ||
+    inheritedGroupId(parentPage) ||
+    inheritedGroupId(current) ||
+    groupRoute()?.groupId ||
+    undefined
+  );
+}
+
+function createBlankPage() {
   return store.addPage({
     name: "새로운 페이지",
-    parentId: parent,
+    parentId: newPageParentId(),
     type: "page",
-    groupId: inheritedGroupId(parentPage) || inheritedGroupId(current),
+    groupId: pageCreationGroupId(),
   });
 }
 
 function pickProjectPdf() {
-  const input = document.createElement("input");
-  input.type = "file";
-  input.accept = "application/pdf,.pdf";
-  input.onchange = () => importPdfAsPage(input.files?.[0]);
-  input.click();
+  pickPdfFile(importPdfAsPage);
 }
 
 function importPdfAsPage(file) {
@@ -3667,15 +3784,12 @@ function importPdfAsPage(file) {
   }
   const reader = new FileReader();
   reader.onload = () => {
-    const parent = newPageParentId();
-    const parentPage = parent ? store.projectById(parent) : null;
-    const current = store.projectById(ui.notePageId || currentPageId());
     const rawName = String(file.name || "").replace(/\.pdf$/i, "").trim();
     const page = store.addPage({
       name: rawName || "PDF",
-      parentId: parent,
+      parentId: newPageParentId(),
       type: "pdf",
-      groupId: inheritedGroupId(parentPage) || inheritedGroupId(current),
+      groupId: pageCreationGroupId(),
       pdfUri: reader.result,
       pdfName: file.name,
       pdfSize: file.size,
@@ -3683,6 +3797,7 @@ function importPdfAsPage(file) {
     });
     ui.modal = null;
     ui.newPageParent = "";
+    ui.newPageGroupId = "";
     ui.pdfZoom = 1;
     openCreatedPage(page);
   };
@@ -3722,6 +3837,10 @@ async function loadPdfJs() {
 
 function dropPdfDocCache() {
   pdfMountGen += 1;
+  pdfPaintGen += 1;
+  pdfInkDrag = null;
+  pdfLastFitWidth = 0;
+  unbindPdfWheel();
   if (pdfMainTask) {
     try {
       pdfMainTask.cancel();
@@ -3771,13 +3890,13 @@ function syncPdfViewerChrome(page) {
 function buildPdfThumbs(host, numPages, current) {
   const rail = host.querySelector("[data-pdf-thumbs]");
   if (!rail) return;
-  rail.innerHTML = Array.from({ length: numPages }, (_, i) => {
+  rail.innerHTML = `<div class="pdf-thumbs-head">페이지</div>${Array.from({ length: numPages }, (_, i) => {
     const n = i + 1;
     return `<button type="button" class="pdf-thumb ${n === current ? "on" : ""}" data-act="pdf-goto" data-page="${n}">
-      <canvas></canvas>
+      <span class="pdf-thumb-frame"><canvas></canvas></span>
       <span class="pdf-thumb-n">${n}</span>
     </button>`;
-  }).join("");
+  }).join("")}`;
 }
 
 async function paintPdfCanvas(doc, pageNumber, canvas, { maxWidth, extraScale = 1, crisp = false }) {
@@ -3793,6 +3912,8 @@ async function paintPdfCanvas(doc, pageNumber, canvas, { maxWidth, extraScale = 
   canvas.height = Math.max(1, Math.floor(viewport.height * outputScale));
   canvas.style.width = `${Math.floor(viewport.width)}px`;
   canvas.style.height = `${Math.floor(viewport.height)}px`;
+  const frame = canvas.closest(".pdf-thumb-frame");
+  if (frame && base.width && base.height) frame.style.aspectRatio = `${base.width} / ${base.height}`;
   const ctx = canvas.getContext("2d", { alpha: false });
   if (!ctx) return;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -3806,14 +3927,26 @@ async function paintPdfCanvas(doc, pageNumber, canvas, { maxWidth, extraScale = 
   return task;
 }
 
+function pdfStageFitWidth(host) {
+  const stage = host.querySelector(".pdf-stage");
+  const raw = (stage?.clientWidth || 0) - 48;
+  return raw > 80 ? raw : 0;
+}
+
 async function paintPdfMain(host) {
   const page = store.projectById(host?.dataset?.id);
   if (!page || !pdfDocCache.doc || pdfDocCache.pageId !== page.id) return;
   const canvas = host.querySelector("[data-pdf-canvas]");
-  const stage = host.querySelector("[data-pdf-main]");
-  if (!canvas || !stage) return;
-  const n = currentPdfNum(page);
-  const width = Math.max(240, (stage.clientWidth || 720) - 32);
+  if (!canvas) return;
+  const gen = ++pdfPaintGen;
+  let width = pdfStageFitWidth(host);
+  if (!width) {
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    if (gen !== pdfPaintGen) return;
+    width = pdfStageFitWidth(host);
+  }
+  width = Math.max(240, width || 720);
+  pdfLastFitWidth = width;
   if (pdfMainTask) {
     try {
       pdfMainTask.cancel();
@@ -3822,19 +3955,349 @@ async function paintPdfMain(host) {
     }
     pdfMainTask = null;
   }
+  let task = null;
   try {
-    const task = await paintPdfCanvas(pdfDocCache.doc, n, canvas, {
+    task = await paintPdfCanvas(pdfDocCache.doc, currentPdfNum(page), canvas, {
       maxWidth: width,
       extraScale: Number(ui.pdfZoom) || 1,
       crisp: true,
     });
+    if (gen !== pdfPaintGen) {
+      try {
+        task?.cancel();
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
     pdfMainTask = task;
     await task?.promise;
   } catch (err) {
     if (err?.name === "RenderingCancelledException") return;
     throw err;
   } finally {
-    if (pdfMainTask) pdfMainTask = null;
+    if (pdfMainTask === task) pdfMainTask = null;
+  }
+  if (gen !== pdfPaintGen) return;
+  paintPdfInk(host);
+  syncPdfTexts(host);
+}
+
+function pdfInkState() {
+  return ui.pdfInk || { mode: "off", color: "#111827", width: 3.5 };
+}
+
+function pdfCanvasCssSize(canvas) {
+  const cssW = canvas?.offsetWidth || parseFloat(canvas?.style.width) || 0;
+  const cssH = canvas?.offsetHeight || parseFloat(canvas?.style.height) || 0;
+  return { cssW, cssH };
+}
+
+function drawPdfStroke(ctx, stroke, cssW, cssH) {
+  const pts = stroke?.points || [];
+  if (!pts.length) return;
+  ctx.strokeStyle = stroke.color || "#111827";
+  ctx.lineWidth = Math.max(1, (Number(stroke.width) || 0.004) * cssW);
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x * cssW, pts[0].y * cssH);
+  if (pts.length === 1) ctx.lineTo(pts[0].x * cssW + 0.2, pts[0].y * cssH);
+  else {
+    for (let i = 1; i < pts.length; i += 1) ctx.lineTo(pts[i].x * cssW, pts[i].y * cssH);
+  }
+  ctx.stroke();
+}
+
+function paintPdfInk(host, extraStroke) {
+  const page = store.projectById(host?.dataset?.id);
+  const main = host?.querySelector("[data-pdf-canvas]");
+  const ink = host?.querySelector("[data-pdf-ink]");
+  if (!page || !main || !ink) return;
+  const { cssW, cssH } = pdfCanvasCssSize(main);
+  if (!cssW || !cssH) return;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  ink.width = Math.max(1, Math.floor(cssW * dpr));
+  ink.height = Math.max(1, Math.floor(cssH * dpr));
+  ink.style.width = `${Math.floor(cssW)}px`;
+  ink.style.height = `${Math.floor(cssH)}px`;
+  const ctx = ink.getContext("2d");
+  if (!ctx) return;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  const n = currentPdfNum(page);
+  const strokes = [...(page.pdfAnnotations?.[n] || [])].filter((item) => item?.type !== "text");
+  if (extraStroke) strokes.push(extraStroke);
+  for (const stroke of strokes) drawPdfStroke(ctx, stroke, cssW, cssH);
+}
+
+function inkPointFromEvent(event, canvas) {
+  const rect = canvas.getBoundingClientRect();
+  if (!rect.width || !rect.height) return null;
+  return {
+    x: Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)),
+    y: Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height)),
+  };
+}
+
+function distToSeg(a, b, p) {
+  const vx = b.x - a.x;
+  const vy = b.y - a.y;
+  const wx = p.x - a.x;
+  const wy = p.y - a.y;
+  const c1 = vx * wx + vy * wy;
+  if (c1 <= 0) return Math.hypot(p.x - a.x, p.y - a.y);
+  const c2 = vx * vx + vy * vy;
+  if (c2 <= c1) return Math.hypot(p.x - b.x, p.y - b.y);
+  const t = c1 / c2;
+  return Math.hypot(p.x - (a.x + t * vx), p.y - (a.y + t * vy));
+}
+
+function strokeNearPoint(stroke, pt, radius) {
+  if (stroke?.type === "text") {
+    return Math.hypot((stroke.x || 0) - pt.x, (stroke.y || 0) - pt.y) <= Math.max(radius, (stroke.fontSize || 0.022) * 1.4);
+  }
+  const pts = stroke?.points || [];
+  for (let i = 0; i < pts.length; i += 1) {
+    const dx = pts[i].x - pt.x;
+    const dy = pts[i].y - pt.y;
+    if (dx * dx + dy * dy <= radius * radius) return true;
+    if (i && distToSeg(pts[i - 1], pts[i], pt) <= radius) return true;
+  }
+  return false;
+}
+
+function savePdfAnnotations(pageId, pageNumber, strokes) {
+  const page = store.projectById(pageId);
+  if (!page) return;
+  const next = { ...(page.pdfAnnotations || {}) };
+  if (strokes.length) next[pageNumber] = strokes;
+  else delete next[pageNumber];
+  store.updatePage(pageId, { pdfAnnotations: next });
+  store.flushPersist();
+}
+
+function erasePdfInkAt(host, page, pageNumber, pt, cssW) {
+  const list = [...(page.pdfAnnotations?.[pageNumber] || [])];
+  const radius = Math.max(0.012, ((pdfInkState().width || 3.5) / Math.max(cssW, 1)) * 2.4);
+  const next = list.filter((stroke) => !strokeNearPoint(stroke, pt, radius));
+  if (next.length === list.length) return;
+  savePdfAnnotations(page.id, pageNumber, next);
+  paintPdfInk(host);
+  syncPdfTexts(host, { force: true });
+}
+
+function finishPdfInkDrag(host, event) {
+  if (!pdfInkDrag || pdfInkDrag.host !== host) return;
+  const overlay = host.querySelector("[data-pdf-ink]");
+  if (event && overlay) {
+    try {
+      overlay.releasePointerCapture(event.pointerId);
+    } catch {
+      /* ignore */
+    }
+  }
+  const drag = pdfInkDrag;
+  pdfInkDrag = null;
+  if (drag.mode === "pen" && drag.stroke.points.length) {
+    const page = store.projectById(host.dataset.id);
+    if (page) {
+      const n = currentPdfNum(page);
+      savePdfAnnotations(page.id, n, [...(page.pdfAnnotations?.[n] || []), drag.stroke]);
+    }
+  }
+  paintPdfInk(host);
+}
+
+function bindPdfInk(host) {
+  const overlay = host.querySelector("[data-pdf-ink]");
+  if (!overlay || overlay.dataset.inkBound) return;
+  overlay.dataset.inkBound = "1";
+  overlay.addEventListener("pointerdown", (event) => {
+    const mode = pdfInkState().mode;
+    if (mode === "off") return;
+    event.preventDefault();
+    const pt = inkPointFromEvent(event, overlay);
+    if (!pt) return;
+    if (mode === "text") {
+      placePdfText(host, pt);
+      return;
+    }
+    try {
+      overlay.setPointerCapture(event.pointerId);
+    } catch {
+      /* ignore */
+    }
+    const page = store.projectById(host.dataset.id);
+    if (!page) return;
+    const n = currentPdfNum(page);
+    const cssW = overlay.getBoundingClientRect().width || 1;
+    if (mode === "erase") {
+      pdfInkDrag = { host, mode: "erase", pointerId: event.pointerId };
+      erasePdfInkAt(host, page, n, pt, cssW);
+      return;
+    }
+    const ink = pdfInkState();
+    pdfInkDrag = {
+      host,
+      mode: "pen",
+      pointerId: event.pointerId,
+      stroke: {
+        id: uid("ann"),
+        type: "stroke",
+        points: [pt],
+        color: ink.color || "#111827",
+        width: Math.min(0.08, Math.max(0.0008, (Number(ink.width) || 3.5) / cssW)),
+      },
+    };
+    paintPdfInk(host, pdfInkDrag.stroke);
+  });
+  overlay.addEventListener("pointermove", (event) => {
+    if (!pdfInkDrag || pdfInkDrag.host !== host) return;
+    if (pdfInkDrag.pointerId != null && event.pointerId !== pdfInkDrag.pointerId) return;
+    const pt = inkPointFromEvent(event, overlay);
+    if (!pt) return;
+    const page = store.projectById(host.dataset.id);
+    if (!page) return;
+    const n = currentPdfNum(page);
+    if (pdfInkDrag.mode === "erase") {
+      erasePdfInkAt(host, page, n, pt, overlay.getBoundingClientRect().width || 1);
+      return;
+    }
+    const last = pdfInkDrag.stroke.points[pdfInkDrag.stroke.points.length - 1];
+    if (last && Math.hypot(pt.x - last.x, pt.y - last.y) < 0.0015) return;
+    pdfInkDrag.stroke.points.push(pt);
+    paintPdfInk(host, pdfInkDrag.stroke);
+  });
+  overlay.addEventListener("pointerup", (event) => finishPdfInkDrag(host, event));
+  overlay.addEventListener("pointercancel", (event) => finishPdfInkDrag(host, event));
+}
+
+function pdfTextFontSize(cssW) {
+  const width = Number(pdfInkState().width) || 3.5;
+  const px = width <= 2 ? 13 : width >= 6 ? 22 : 16;
+  return Math.min(0.12, Math.max(0.01, px / Math.max(cssW, 1)));
+}
+
+function flushPdfTextEditor(root = document) {
+  root.querySelectorAll(".pdf-text-edit:focus").forEach((el) => el.blur());
+}
+
+function placePdfText(host, pt) {
+  const page = store.projectById(host.dataset.id);
+  if (!page) return;
+  const n = currentPdfNum(page);
+  const cssW = host.querySelector("[data-pdf-canvas]")?.offsetWidth || 800;
+  const item = {
+    id: uid("ann"),
+    type: "text",
+    x: pt.x,
+    y: pt.y,
+    text: "",
+    color: pdfInkState().color || "#111827",
+    fontSize: pdfTextFontSize(cssW),
+  };
+  savePdfAnnotations(page.id, n, [...(page.pdfAnnotations?.[n] || []), item]);
+  syncPdfTexts(host, { force: true, focusId: item.id });
+}
+
+function commitPdfText(el, { persist = true, removeEmpty = false } = {}) {
+  const host = el.closest("[data-pdf-viewer]");
+  const page = store.projectById(host?.dataset?.id);
+  const id = el.dataset.ann;
+  if (!host || !page || !id) return;
+  const n = currentPdfNum(page);
+  const text = String(el.innerText || "").replace(/\u00a0/g, " ").trimEnd();
+  const list = [...(page.pdfAnnotations?.[n] || [])];
+  const index = list.findIndex((item) => item.id === id);
+  if (index < 0) return;
+  if (removeEmpty && !text.trim()) {
+    list.splice(index, 1);
+    savePdfAnnotations(page.id, n, list);
+    syncPdfTexts(host, { force: true });
+    return;
+  }
+  if (list[index].text === text) {
+    if (persist) store.flushPersist();
+    return;
+  }
+  list[index] = { ...list[index], type: "text", text };
+  if (persist) savePdfAnnotations(page.id, n, list);
+  else store.updatePage(page.id, { pdfAnnotations: { ...(page.pdfAnnotations || {}), [n]: list } });
+}
+
+function syncPdfTexts(host, { force = false, focusId = "" } = {}) {
+  const layer = host?.querySelector("[data-pdf-texts]");
+  const main = host?.querySelector("[data-pdf-canvas]");
+  const page = store.projectById(host?.dataset?.id);
+  if (!layer || !main || !page) return;
+  if (!force && layer.querySelector(".pdf-text-edit:focus")) return;
+  const { cssW, cssH } = pdfCanvasCssSize(main);
+  if (!cssW || !cssH) return;
+  const n = currentPdfNum(page);
+  const items = (page.pdfAnnotations?.[n] || []).filter((item) => item?.type === "text");
+  layer.style.width = `${Math.floor(cssW)}px`;
+  layer.style.height = `${Math.floor(cssH)}px`;
+  if (!force && layer.dataset.page === String(n) && layer.dataset.count === String(items.length)) return;
+  layer.dataset.page = String(n);
+  layer.dataset.count = String(items.length);
+  layer.innerHTML = items
+    .map(
+      (item) =>
+        `<div class="pdf-text" style="left:${item.x * 100}%;top:${item.y * 100}%;color:${escapeHtml(item.color || "#111827")};--pdf-fs:${item.fontSize || 0.022}">
+          <div class="pdf-text-edit" contenteditable="true" data-act="pdf-text" data-ann="${item.id}" spellcheck="false">${escapeHtml(item.text || "")}</div>
+        </div>`,
+    )
+    .join("");
+  if (focusId) {
+    requestAnimationFrame(() => {
+      const node = layer.querySelector(`[data-ann="${focusId}"]`);
+      if (!node) return;
+      node.focus();
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+    });
+  }
+}
+
+function syncPdfInkChrome(host) {
+  if (!host) return;
+  const ink = pdfInkState();
+  host.classList.toggle("inking", ink.mode === "pen" || ink.mode === "erase");
+  host.classList.toggle("texting", ink.mode === "text");
+  const overlay = host.querySelector("[data-pdf-ink]");
+  if (overlay) {
+    overlay.style.pointerEvents = ink.mode === "off" ? "none" : "auto";
+    overlay.classList.toggle("erase", ink.mode === "erase");
+    overlay.classList.toggle("text", ink.mode === "text");
+  }
+  host.querySelector("[data-act='pdf-ink']")?.classList.toggle("on", ink.mode === "pen");
+  host.querySelector("[data-act='pdf-ink-text']")?.classList.toggle("on", ink.mode === "text");
+  host.querySelector("[data-act='pdf-ink-erase']")?.classList.toggle("on", ink.mode === "erase");
+  host.querySelectorAll("[data-act='pdf-ink-color']").forEach((btn) => {
+    btn.classList.toggle("on", (btn.dataset.color || "").toLowerCase() === String(ink.color || "").toLowerCase());
+  });
+  host.querySelectorAll("[data-act='pdf-ink-width']").forEach((btn) => {
+    btn.classList.toggle("on", Number(btn.dataset.width) === Number(ink.width));
+  });
+}
+
+function syncPdfNotesChrome() {
+  const view = document.querySelector(".pdf-view");
+  if (!view) return;
+  const open = Boolean(ui.pdfNotesOpen);
+  const workspace = view.querySelector(".pdf-workspace");
+  const panel = view.querySelector("[data-pdf-notes]");
+  const btn = view.querySelector("[data-act='toggle-pdf-notes']");
+  view.classList.toggle("notes-open", open);
+  workspace?.classList.toggle("notes-open", open);
+  if (panel) panel.hidden = !open;
+  if (btn) {
+    btn.classList.toggle("on", open);
+    btn.setAttribute("aria-expanded", String(open));
   }
 }
 
@@ -3864,6 +4327,7 @@ async function mountPdfViewer(host) {
   const gen = ++pdfMountGen;
   pdfResizeObs?.disconnect();
   pdfResizeObs = null;
+  unbindPdfWheel();
   try {
     if (pdfDocCache.pageId !== page.id || !pdfDocCache.doc) {
       pdfDocCache.doc?.destroy?.();
@@ -3885,13 +4349,19 @@ async function mountPdfViewer(host) {
     if (n !== page.pdfPage) store.updatePage(page.id, { pdfPage: n });
     buildPdfThumbs(host, total, n);
     syncPdfViewerChrome({ ...page, pdfPage: n });
+    bindPdfInk(host);
+    syncPdfInkChrome(host);
+    bindPdfWheel(host, gen);
     await paintPdfMain(host);
     if (gen !== pdfMountGen) return;
     paintPdfThumbs(host, gen);
-    const stage = host.querySelector("[data-pdf-main]");
+    const stage = host.querySelector(".pdf-stage");
     if (stage && typeof ResizeObserver !== "undefined") {
       let tick = 0;
-      pdfResizeObs = new ResizeObserver(() => {
+      pdfResizeObs = new ResizeObserver((entries) => {
+        const box = entries[0]?.contentRect;
+        const nextWidth = Math.max(240, (box?.width || stage.clientWidth || 0) - 48);
+        if (pdfLastFitWidth && Math.abs(nextWidth - pdfLastFitWidth) < 8) return;
         clearTimeout(tick);
         tick = setTimeout(() => {
           if (gen !== pdfMountGen) return;
@@ -3906,8 +4376,73 @@ async function mountPdfViewer(host) {
   }
 }
 
-function setPdfViewPage(next) {
+function unbindPdfWheel() {
+  pdfWheelOff?.();
+  pdfWheelOff = null;
+  pdfWheelAcc = 0;
+  pdfWheelArmed = true;
+  clearTimeout(pdfWheelIdle);
+  pdfWheelIdle = 0;
+}
+
+function pdfWheelDeltaY(event, pane) {
+  const dy = Number(event.deltaY) || 0;
+  if (event.deltaMode === 1) return dy * 16;
+  if (event.deltaMode === 2) return dy * (pane?.clientHeight || 800);
+  return dy;
+}
+
+function bindPdfWheel(host, gen) {
+  unbindPdfWheel();
+  const pane = host.querySelector("[data-pdf-main]");
+  if (!pane) return;
+  const onWheel = (event) => {
+    if (gen !== pdfMountGen) return;
+    if (document.querySelector("[data-pdf-viewer]") !== host) return;
+    if (event.ctrlKey || event.metaKey) return;
+    if (pdfInkDrag) return;
+    const dy = pdfWheelDeltaY(event, pane);
+    if (!dy) return;
+    const atTop = pane.scrollTop <= 1;
+    const atBottom = pane.scrollTop + pane.clientHeight >= pane.scrollHeight - 1;
+    const towardNext = dy > 0;
+    if ((towardNext && !atBottom) || (!towardNext && !atTop)) {
+      pdfWheelAcc = 0;
+      pdfWheelArmed = true;
+      return;
+    }
+    event.preventDefault();
+    if (!pdfWheelArmed) {
+      clearTimeout(pdfWheelIdle);
+      pdfWheelIdle = setTimeout(() => {
+        pdfWheelArmed = true;
+        pdfWheelAcc = 0;
+      }, 220);
+      return;
+    }
+    pdfWheelAcc += dy;
+    clearTimeout(pdfWheelIdle);
+    pdfWheelIdle = setTimeout(() => {
+      pdfWheelAcc = 0;
+    }, 180);
+    if (Math.abs(pdfWheelAcc) < 72) return;
+    const dir = pdfWheelAcc > 0 ? 1 : -1;
+    pdfWheelAcc = 0;
+    pdfWheelArmed = false;
+    pdfWheelIdle = setTimeout(() => {
+      pdfWheelArmed = true;
+    }, 280);
+    const page = store.projectById(host.dataset.id);
+    if (!isPdfItem(page)) return;
+    setPdfViewPage(currentPdfNum(page) + dir, { fromWheel: true });
+  };
+  pane.addEventListener("wheel", onWheel, { passive: false });
+  pdfWheelOff = () => pane.removeEventListener("wheel", onWheel);
+}
+
+function setPdfViewPage(next, { fromWheel = false } = {}) {
   const host = document.querySelector("[data-pdf-viewer]");
+  flushPdfTextEditor(host);
   const page = store.projectById(host?.dataset?.id);
   if (!isPdfItem(page)) return;
   const total = pdfDocCache.numPages || 1;
@@ -3916,10 +4451,17 @@ function setPdfViewPage(next) {
     syncPdfViewerChrome(page);
     return;
   }
+  const dir = n - currentPdfNum(page);
   store.updatePage(page.id, { pdfPage: n });
   const live = store.projectById(page.id);
   syncPdfViewerChrome(live);
-  paintPdfMain(host).catch(() => showPdfFallback(host, page.pdfUri));
+  paintPdfMain(host)
+    .then(() => {
+      const pane = host.querySelector("[data-pdf-main]");
+      if (!pane) return;
+      pane.scrollTop = fromWheel && dir < 0 ? pane.scrollHeight : 0;
+    })
+    .catch(() => showPdfFallback(host, page.pdfUri));
 }
 
 function nudgePdfZoom(dir) {
@@ -3934,14 +4476,34 @@ function nudgePdfZoom(dir) {
   paintPdfMain(host).catch(() => showPdfFallback(host, page.pdfUri));
 }
 
-function openCreatedPage(page) {
-  ui.notePageId = page.id;
+function openProjectPage(page) {
+  ui.notePageId = page?.id || null;
   if (parseHash().name === "focus") {
+    render();
+    return;
+  }
+  const groupId = inheritedGroupId(page);
+  go(groupId ? groupPath(groupId, "projects", page.id) : `/projects/${page.id}`);
+}
+
+function openProjectsRoot() {
+  ui.notePageId = null;
+  if (parseHash().name === "focus") {
+    render();
+    return;
+  }
+  const ctx = groupRoute();
+  go(ctx?.groupId ? groupPath(ctx.groupId, "projects") : "/projects");
+}
+
+function openCreatedPage(page) {
+  if (parseHash().name === "focus") {
+    ui.notePageId = page.id;
     render();
     requestAnimationFrame(() => document.querySelector(".page-name")?.focus());
     return;
   }
-  go(`/projects/${page.id}`);
+  openProjectPage(page);
 }
 
 function onClick(event) {
@@ -3954,6 +4516,7 @@ function onClick(event) {
     ui.editingTaskId = null;
     ui.pollGroupId = null;
     ui.newPageParent = "";
+    ui.newPageGroupId = "";
     render();
     return;
   }
@@ -3993,6 +4556,9 @@ function onClick(event) {
       ui.emojiOpen = false;
       document.querySelector(".note-emoji-pop")?.classList.remove("open");
       document.querySelector("[data-act='note-emoji-toggle']")?.classList.remove("on");
+    } else if (ui.timetableMenu && !event.target.closest(".tt-switch-more")) {
+      ui.timetableMenu = false;
+      render();
     } else if (ui.docTabMenu && !event.target.closest(".doc-tab")) {
       ui.docTabMenu = null;
       render();
@@ -4006,6 +4572,9 @@ function onClick(event) {
   const id = actEl.dataset.id;
   if (ui.openTaskMenu && act !== "task-menu" && !event.target.closest(".task-menu-wrap")) {
     ui.openTaskMenu = null;
+  }
+  if (ui.timetableMenu && act !== "tt-menu" && !event.target.closest(".tt-switch-more")) {
+    ui.timetableMenu = false;
   }
   if (act === "toggle-task") store.toggleTask(id);
   else if (act === "task-menu") {
@@ -4070,7 +4639,7 @@ function onClick(event) {
     ui.courseDeleteConfirm = false;
     ui.modal = "course";
   } else if (act === "edit-course") {
-    const course = (store.getState().courses || []).find((item) => item.id === id);
+    const course = store.courseById(id);
     ui.courseId = id;
     ui.courseSlotsDraft = store.courseSlots(course);
     ui.courseColorDraft = course?.color || store.getState().categories[0]?.color || "#0EA5E9";
@@ -4111,31 +4680,68 @@ function onClick(event) {
     ui.modal = null;
     resetCourseDrafts();
     maybeSyncTimetable();
-  } else if (act === "tt-tab") ui.timetableTab = actEl.dataset.tab === "gpa" ? "gpa" : "grid";
-  else if (act === "gpa-semester") ui.gpaSemester = actEl.dataset.semester || "";
+  } else if (act === "tt-tab") {
+    ui.timetableTab = actEl.dataset.tab === "gpa" ? "gpa" : "grid";
+    ui.timetableMenu = false;
+  } else if (act === "select-timetable") {
+    ui.timetableId = id;
+    ui.timetableMenu = false;
+  } else if (act === "tt-menu") {
+    ui.timetableMenu = !ui.timetableMenu;
+  } else if (act === "add-timetable") {
+    ui.timetableMenu = false;
+    const name = prompt("시간표 이름", "새 시간표");
+    if (name === null) return;
+    const tt = store.addTimetable(name);
+    ui.timetableId = tt.id;
+  } else if (act === "rename-timetable") {
+    ui.timetableMenu = false;
+    const current = store.getTimetables().find((item) => item.id === id);
+    const name = prompt("시간표 이름", current?.name || "");
+    if (name === null) return;
+    store.renameTimetable(id, name);
+  } else if (act === "set-primary-timetable") {
+    ui.timetableMenu = false;
+    store.setPrimaryTimetable(id);
+    maybeSyncTimetable();
+  } else if (act === "del-timetable") {
+    ui.timetableMenu = false;
+    const list = store.getTimetables();
+    if (list.length <= 1) {
+      alert("마지막 시간표는 삭제할 수 없습니다.");
+      return;
+    }
+    const current = list.find((item) => item.id === id);
+    if (!confirm(`"${current?.name || "시간표"}"를 삭제할까요? 안의 수업도 함께 삭제됩니다.`)) return;
+    const wasPrimary = id === store.getState().primaryTimetableId;
+    if (!store.deleteTimetable(id)) return;
+    const next = store.getTimetables();
+    ui.timetableId = next.some((item) => item.id === ui.timetableId)
+      ? ui.timetableId
+      : store.getState().primaryTimetableId || next[0]?.id || "";
+    if (wasPrimary) maybeSyncTimetable();
+  } else if (act === "gpa-semester") ui.gpaSemester = actEl.dataset.semester || "";
   else if (act === "toggle-grade-major") {
     const row = (store.getState().gradeRecords || []).find((item) => item.id === id);
     if (row) store.updateGradeRecord(id, { isMajor: !row.isMajor });
   } else if (act === "del-grade") store.deleteGradeRecord(id);
   else if (act === "open-page") {
-    ui.notePageId = id;
+    const page = store.projectById(id);
     if (parseHash().name === "focus") {
+      ui.notePageId = id;
       render();
       return;
     }
-    go(`/projects/${id}`);
+    if (page) openProjectPage(page);
+    else go(`/projects/${id}`);
     return;
   } else if (act === "open-projects-root") {
-    ui.notePageId = null;
-    if (parseHash().name === "focus") {
-      render();
-      return;
-    }
-    go("/projects");
+    openProjectsRoot();
     return;
   } else if (act === "new-page") {
     const current = store.projectById(ui.notePageId || currentPageId());
     ui.newPageParent = actEl.dataset.parent || creationParentId(current) || "";
+    ui.newPageGroupId = actEl.dataset.group || inheritedGroupId(current) || groupRoute()?.groupId || "";
     ui.modal = "new-page-choice";
     render();
     return;
@@ -4143,6 +4749,7 @@ function onClick(event) {
     ui.modal = null;
     const page = createBlankPage();
     ui.newPageParent = "";
+    ui.newPageGroupId = "";
     openCreatedPage(page);
     return;
   } else if (act === "new-page-pdf") {
@@ -4167,6 +4774,41 @@ function onClick(event) {
   } else if (act === "pdf-zoom-out") {
     nudgePdfZoom(-1);
     return;
+  } else if (act === "toggle-pdf-notes") {
+    ui.pdfNotesOpen = !ui.pdfNotesOpen;
+    syncPdfNotesChrome();
+    if (ui.pdfNotesOpen) {
+      requestAnimationFrame(() => document.querySelector("[data-act='pdf-notes']")?.focus());
+    }
+    return;
+  } else if (act === "pdf-ink") {
+    const ink = pdfInkState();
+    ui.pdfInk = { ...ink, mode: ink.mode === "pen" ? "off" : "pen" };
+    syncPdfInkChrome(document.querySelector("[data-pdf-viewer]"));
+    return;
+  } else if (act === "pdf-ink-text") {
+    const ink = pdfInkState();
+    ui.pdfInk = { ...ink, mode: ink.mode === "text" ? "off" : "text" };
+    syncPdfInkChrome(document.querySelector("[data-pdf-viewer]"));
+    return;
+  } else if (act === "pdf-ink-erase") {
+    const ink = pdfInkState();
+    ui.pdfInk = { ...ink, mode: ink.mode === "erase" ? "off" : "erase" };
+    syncPdfInkChrome(document.querySelector("[data-pdf-viewer]"));
+    return;
+  } else if (act === "pdf-ink-color") {
+    const ink = pdfInkState();
+    ui.pdfInk = {
+      ...ink,
+      color: actEl.dataset.color || "#111827",
+      mode: ink.mode === "off" ? "pen" : ink.mode,
+    };
+    syncPdfInkChrome(document.querySelector("[data-pdf-viewer]"));
+    return;
+  } else if (act === "pdf-ink-width") {
+    ui.pdfInk = { ...pdfInkState(), width: Number(actEl.dataset.width) || 3.5 };
+    syncPdfInkChrome(document.querySelector("[data-pdf-viewer]"));
+    return;
   } else if (act === "new-folder") {
     const name = prompt("폴더 이름");
     if (!name) return;
@@ -4178,7 +4820,11 @@ function onClick(event) {
       parentId: parent,
       type: "folder",
       icon: "F",
-      groupId: inheritedGroupId(parentPage) || inheritedGroupId(current),
+      groupId:
+        actEl.dataset.group ||
+        inheritedGroupId(parentPage) ||
+        inheritedGroupId(current) ||
+        groupRoute()?.groupId,
     });
     openCreatedPage(folder);
     return;
@@ -4187,7 +4833,7 @@ function onClick(event) {
     const folder = isFolderItem(target);
     if (!confirm(folder ? "이 폴더와 안의 모든 항목을 삭제할까요?" : "이 페이지를 삭제할까요?")) return;
     const parentId = target?.parentId || null;
-    const scope = target?.groupId || null;
+    const scope = target?.groupId || groupRoute()?.groupId || null;
     store.deletePage(id);
     const parent = parentId ? store.projectById(parentId) : null;
     const next =
@@ -4199,7 +4845,8 @@ function onClick(event) {
       render();
       return;
     }
-    go(next ? `/projects/${next.id}` : "/projects");
+    if (next) openProjectPage(next);
+    else go(scope ? groupPath(scope, "projects") : "/projects");
     return;
   } else if (act === "add-doc-tab") {
     store.addPageTab(id);
@@ -4535,8 +5182,14 @@ function onClick(event) {
   } else if (act === "del-theme-preset") {
     store.removeThemePreset(actEl.dataset.color);
   } else if (act === "group-tab") {
-    ui.groupTab = actEl.dataset.tab || "tasks";
-    if (ui.groupTab === "schedule") refreshGroupBundle();
+    const tab = GROUP_TABS.includes(actEl.dataset.tab) ? actEl.dataset.tab : "tasks";
+    const groupId = actEl.dataset.group || groupRoute()?.groupId || parseHash().id;
+    ui.groupTab = tab;
+    if (tab === "schedule") refreshGroupBundle();
+    if (groupId) {
+      go(groupPath(groupId, tab));
+      return;
+    }
   } else if (act === "open-poll") {
     if (!requireLoginForGroups()) {
       /* blocked */
@@ -4550,10 +5203,12 @@ function onClick(event) {
   } else if (act === "meet-ai") {
     runMeetingAi(id);
     return;
-  } else if (act === "react") store.toggleReaction(id, actEl.dataset.emo);
-  else if (act === "del-cat") store.deleteCategory(id);
+  } else if (act === "del-cat") store.deleteCategory(id);
   else if (act === "bell") ui.panel = !ui.panel;
-  else if (act === "open-note") return openReport(id);
+  else if (act === "open-note") {
+    store.markNotificationsRead();
+    ui.panel = false;
+  }
   else if (act === "dismiss-toast") {
     ui.toast = null;
     document.querySelector(".toast-stack")?.remove();
@@ -4595,6 +5250,7 @@ function onClick(event) {
     ui.editingTaskId = null;
     ui.pollGroupId = null;
     ui.newPageParent = "";
+    ui.newPageGroupId = "";
   } else if (act === "start-add") ui.addingCategory = actEl.dataset.cat;
   else if (act === "cancel-add") ui.addingCategory = null;
   else return;
@@ -4708,10 +5364,6 @@ function onSubmit(event) {
         render();
       });
     return;
-  } else if (act === "add-group-page") {
-    const page = store.addPage({ name: data.get("name"), groupId: data.get("groupId") });
-    go(`/projects/${page.id}`);
-    return;
   } else if (act === "add-comment") {
     const page = store.projectById(currentPageId());
     const text = String(data.get("text") || "").trim();
@@ -4760,7 +5412,8 @@ function onSubmit(event) {
       alert("같은 요일에 시간이 겹치는 슬롯이 있습니다.");
       return;
     }
-    const clash = (store.getState().courses || []).some(
+    const timetableId = id ? store.timetableIdForCourse(id) || activeTimetableId() : activeTimetableId();
+    const clash = store.coursesIn(timetableId).some(
       (course) => course.id !== id && coursesOverlap(course, payload),
     );
     if (clash) {
@@ -4768,7 +5421,7 @@ function onSubmit(event) {
       return;
     }
     if (id) store.updateCourse(id, payload);
-    else store.addCourse(payload);
+    else store.addCourse(payload, timetableId);
     ui.modal = null;
     resetCourseDrafts();
     maybeSyncTimetable();
@@ -4799,9 +5452,11 @@ function onSubmit(event) {
       .then((result) => {
         if (result?.poll) remotePolls = [...remotePolls, result.poll];
         ui.modal = null;
+        const groupId = String(data.get("groupId") || ui.pollGroupId || groupRoute()?.groupId || "");
         ui.pollGroupId = null;
         ui.groupTab = "schedule";
-        render();
+        if (groupId) go(groupPath(groupId, "schedule"));
+        else render();
       })
       .catch(() => {
         alert("약속 잡기를 만들지 못했어요. 로그인 상태와 그룹 멤버 여부를 확인해주세요.");
@@ -4826,25 +5481,6 @@ function onSubmit(event) {
     ui.editCategoryId = null;
   } else if (act === "add-cat") {
     store.addCategory(data.get("name"), "#2563eb");
-  } else if (act === "add-post") {
-    const file = document.getElementById("post-file")?.files?.[0];
-    const send = (imageUri) =>
-      store.addPost({
-        groupId: data.get("groupId"),
-        categoryId: "personal",
-        caption: data.get("caption"),
-        imageUri,
-      });
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = () => {
-        send(reader.result);
-        render();
-      };
-      reader.readAsDataURL(file);
-      return;
-    }
-    send("");
   } else if (act === "login") {
     auth
       .login(data.get("email"), data.get("password"))
@@ -4887,11 +5523,19 @@ function onInput(event) {
     if (!body) return;
     const current = store.projectById(ui.notePageId);
     const folder = current && !isFolderItem(current) ? store.projectById(current.parentId) : current;
-    const scope = current?.groupId || folder?.groupId || null;
+    const scope = current?.groupId || folder?.groupId || groupRoute()?.groupId || null;
     body.innerHTML = folderBodyHtml(isFolderItem(folder) ? folder : null, scope);
     return;
   }
   if (el.dataset.act === "pdf-page-input") return;
+  if (el.dataset.act === "pdf-notes") {
+    store.updatePage(el.dataset.id, { pdfNotes: el.value });
+    return;
+  }
+  if (el.dataset.act === "pdf-text") {
+    commitPdfText(el, { persist: false });
+    return;
+  }
   if (el.dataset.act === "find-q") {
     ui.findQ = el.value;
     ui.findIndex = 0;
@@ -4956,7 +5600,7 @@ function onInput(event) {
 
 function onKey(event) {
   const mod = event.metaKey || event.ctrlKey;
-  const inField = event.target.closest("input, textarea, select, [data-act='find-q'], [data-act='replace-q'], [data-act='note-query'], [data-act='rename-page'], [data-act='rename-doc-tab'], [data-act='pdf-page-input']");
+  const inField = event.target.closest("input, textarea, select, [data-act='find-q'], [data-act='replace-q'], [data-act='note-query'], [data-act='rename-page'], [data-act='rename-doc-tab'], [data-act='pdf-page-input'], [data-act='pdf-text']");
   if (event.key === "Escape") {
     ui.formatOpen = false;
     ui.listOpen = false;
@@ -4967,13 +5611,15 @@ function onKey(event) {
     const commentWas = ui.commentBlockId;
     const renameWas = ui.renamingTabId;
     const menuWas = ui.docTabMenu;
+    const ttMenuWas = ui.timetableMenu;
     ui.findOpen = false;
     ui.commentBlockId = null;
     ui.renamingTabId = null;
     ui.docTabMenu = null;
+    ui.timetableMenu = false;
     document.querySelectorAll(".note-color-pop").forEach((el) => el.classList.remove("open"));
     document.querySelector(".note-emoji-pop")?.classList.remove("open");
-    if (findWas || commentWas || renameWas || menuWas) render();
+    if (findWas || commentWas || renameWas || menuWas || ttMenuWas) render();
   }
   if (mod && event.key.toLowerCase() === "z" && !inField && document.querySelector(".note-doc")) {
     event.preventDefault();
@@ -5151,7 +5797,6 @@ async function boot() {
     const remote = await auth.pullRemote().catch(() => null);
     if (remote?.payload) store.replaceState(remote.payload);
   }
-  await maybeDailyCoach();
   if (!location.hash) location.hash = "#/today";
   await registerCustomFont(store.getState().settings?.customFont);
   applyAppearance();
@@ -5168,6 +5813,11 @@ async function boot() {
   document.addEventListener("click", onClick);
   document.addEventListener("submit", onSubmit);
   document.addEventListener("input", onInput);
+  document.addEventListener("focusout", (event) => {
+    if (event.target?.dataset?.act === "pdf-text") {
+      commitPdfText(event.target, { persist: true, removeEmpty: true });
+    }
+  });
   document.addEventListener("pointerover", (event) => {
     const cell = event.target.closest("[data-act='toggle-poll-slot']");
     if (!cell) return;

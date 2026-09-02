@@ -43,15 +43,3 @@ export const pollResponses = pgTable(
   },
   (table) => [uniqueIndex("poll_responses_poll_user").on(table.pollId, table.userId)],
 );
-
-export const feedPosts = pgTable("feed_posts", {
-  id: text("id").primaryKey(),
-  groupId: text("group_id").notNull(),
-  authorId: text("author_id").notNull(),
-  authorName: text("author_name"),
-  categoryId: text("category_id").notNull(),
-  imageUri: text("image_uri"),
-  caption: text("caption"),
-  reactions: jsonb("reactions").notNull(),
-  createdAt: timestamp("created_at").defaultNow(),
-});

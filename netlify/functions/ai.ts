@@ -11,24 +11,6 @@ export default async (req: Request, _context: Context) => {
     baseURL: Netlify.env.get("OPENAI_BASE_URL"),
   });
 
-  if (body.action === "daily") {
-    const analysis = body.analysis ?? {};
-    const completion = await client.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        {
-          role: "system",
-          content:
-            "대학생 집중 앱의 코치다. 한국어로, 훈계 없이 짧게 답한다. JSON만 반환: title, headline, body. body는 2~3문장. 이수율, 집중 시간, 미완료, 세션 분절을 근거로 내일 한 가지만 제안한다.",
-        },
-        { role: "user", content: JSON.stringify(analysis) },
-      ],
-      response_format: { type: "json_object" },
-    });
-    const text = completion.choices[0]?.message?.content || "{}";
-    return json(JSON.parse(text));
-  }
-
   if (body.action === "split") {
     const completion = await client.chat.completions.create({
       model: "gpt-4o-mini",

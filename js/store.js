@@ -25,7 +25,7 @@ export function defaultSettings() {
   return {
     rejectGroupInvites: false,
     shareTimetableWithGroups: false,
-    notifications: { dailyReport: true, groupUpdates: true },
+    notifications: { groupUpdates: true },
     fontSize: "md",
     fontFamily: "pretendard",
     themeColor: "#2563eb",
@@ -65,6 +65,138 @@ function ensurePageTabs(page) {
   };
 }
 
+function clampUnit(value) {
+  return Math.min(1, Math.max(0, Number(value) || 0));
+}
+
+function annotationCount(map) {
+  return Object.values(map || {}).reduce((sum, list) => sum + (Array.isArray(list) ? list.length : 0), 0);
+}
+
+function normalizePdfText(item) {
+  return {
+    id: item.id || uid("ann"),
+    type: "text",
+    x: clampUnit(item.x),
+    y: clampUnit(item.y),
+    text: String(item.text ?? ""),
+    color: String(item.color || "#111827"),
+    fontSize: Math.min(0.12, Math.max(0.01, Number(item.fontSize) || 0.022)),
+  };
+}
+
+function normalizePdfStroke(item) {
+  const points = (Array.isArray(item.points) ? item.points : [])
+    .map((pt) => ({
+      x: clampUnit(pt?.x),
+      y: clampUnit(pt?.y),
+    }))
+    .filter((pt) => Number.isFinite(pt.x) && Number.isFinite(pt.y));
+  if (!points.length) return null;
+  return {
+    id: item.id || uid("ann"),
+    type: "stroke",
+    points,
+    color: String(item.color || "#111827"),
+    width: normalizeInkWidth(item.width),
+  };
+}
+
+function normalizePdfAnnotations(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out = {};
+  for (const [key, list] of Object.entries(raw)) {
+    const n = Math.max(1, Number(key) || 0);
+    if (!n || !Array.isArray(list)) continue;
+    const items = list
+      .map((item) => {
+        if (!item || typeof item !== "object") return null;
+        if (item.type === "text" || (item.text != null && !Array.isArray(item.points))) return normalizePdfText(item);
+        return normalizePdfStroke(item);
+      })
+      .filter(Boolean);
+    if (items.length) out[n] = items;
+  }
+  return out;
+}
+
+function mergePdfAnnotationMaps(preferred, other) {
+  const a = normalizePdfAnnotations(preferred);
+  const b = normalizePdfAnnotations(other);
+  const out = { ...b };
+  for (const [key, list] of Object.entries(a)) {
+    const n = Number(key);
+    const alt = out[n] || [];
+    out[n] = list.length >= alt.length ? list : alt;
+  }
+  return out;
+}
+
+function mergePdfProjectFields(incoming, local) {
+  const localById = new Map((Array.isArray(local) ? local : []).map((page) => [page?.id, page]));
+  return (Array.isArray(incoming) ? incoming : []).map((page) => {
+    if (!page || page.type !== "pdf") return page;
+    const prev = localById.get(page.id);
+    if (!prev) return { ...page, pdfAnnotations: normalizePdfAnnotations(page.pdfAnnotations) };
+    const preferLocal = (prev.updatedAt || 0) >= (page.updatedAt || 0);
+    return {
+      ...page,
+      pdfAnnotations: mergePdfAnnotationMaps(
+        preferLocal ? prev.pdfAnnotations : page.pdfAnnotations,
+        preferLocal ? page.pdfAnnotations : prev.pdfAnnotations,
+      ),
+      pdfNotes: preferLocal ? String(prev.pdfNotes || page.pdfNotes || "") : String(page.pdfNotes || prev.pdfNotes || ""),
+    };
+  });
+}
+
+const ANN_KEY = "focus-web-v1-pdf-ann";
+
+function annotationSidecar(projects) {
+  const out = {};
+  for (const page of Array.isArray(projects) ? projects : []) {
+    if (page?.type !== "pdf") continue;
+    const ann = normalizePdfAnnotations(page.pdfAnnotations);
+    if (annotationCount(ann)) out[page.id] = ann;
+  }
+  return out;
+}
+
+function writeAnnotationSidecar(projects) {
+  try {
+    localStorage.setItem(ANN_KEY, JSON.stringify(annotationSidecar(projects)));
+  } catch {
+    /* quota */
+  }
+}
+
+function readAnnotationSidecar() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(ANN_KEY) || "{}");
+    return raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+  } catch {
+    return {};
+  }
+}
+
+function applyAnnotationSidecar(projects) {
+  const extra = readAnnotationSidecar();
+  return (Array.isArray(projects) ? projects : []).map((page) => {
+    if (!page || page.type !== "pdf") return page;
+    return {
+      ...page,
+      pdfAnnotations: mergePdfAnnotationMaps(page.pdfAnnotations, extra[page.id]),
+    };
+  });
+}
+
+function normalizeInkWidth(value) {
+  const w = Number(value);
+  if (!Number.isFinite(w) || w <= 0) return 0.004;
+  if (w > 1) return Math.min(0.08, Math.max(0.0008, w / 800));
+  return Math.min(0.08, Math.max(0.0008, w));
+}
+
 function migrateProjects(projects) {
   if (!Array.isArray(projects)) return [];
   return projects.map((page) => {
@@ -77,6 +209,8 @@ function migrateProjects(projects) {
         pdfName: page.pdfName || "",
         pdfSize: Number(page.pdfSize) || 0,
         pdfPage: Math.max(1, Number(page.pdfPage) || 1),
+        pdfAnnotations: normalizePdfAnnotations(page.pdfAnnotations),
+        pdfNotes: String(page.pdfNotes || ""),
         blocks: Array.isArray(page.blocks) ? page.blocks : [],
       };
     }
@@ -138,7 +272,7 @@ function migrateCourses(list) {
   return (Array.isArray(list) ? list : []).map((course) => {
     const slots = courseSlots(course);
     return {
-      id: course.id,
+      id: course.id || uid("course"),
       title: course.title,
       professor: course.professor || "",
       room: course.room || "",
@@ -147,6 +281,56 @@ function migrateCourses(list) {
       slots,
     };
   });
+}
+
+function makeTimetable(name, courses, id) {
+  return {
+    id: id || uid("tt"),
+    name: String(name || "").trim() || "시간표",
+    courses: migrateCourses(courses),
+  };
+}
+
+function normalizeTimetable(item) {
+  if (!item || typeof item !== "object") return null;
+  return makeTimetable(item.name, item.courses, item.id);
+}
+
+function migrateTimetableState(data, fallback) {
+  const source = data && typeof data === "object" ? data : {};
+  const legacyCourses = Array.isArray(source.courses) ? source.courses : [];
+  let tables = (Array.isArray(source.timetables) ? source.timetables : []).map(normalizeTimetable).filter(Boolean);
+  if (!tables.length) {
+    if (legacyCourses.length) {
+      tables = [makeTimetable("기본 시간표", legacyCourses)];
+    } else if (Array.isArray(fallback?.timetables) && fallback.timetables.length) {
+      tables = fallback.timetables.map(normalizeTimetable).filter(Boolean);
+    } else {
+      tables = [makeTimetable("기본 시간표", [])];
+    }
+  } else if (legacyCourses.length && tables.every((item) => !item.courses.length)) {
+    tables = [{ ...tables[0], courses: migrateCourses(legacyCourses) }, ...tables.slice(1)];
+  }
+  const primary = tables.some((item) => item.id === source.primaryTimetableId)
+    ? source.primaryTimetableId
+    : tables.some((item) => item.id === fallback?.primaryTimetableId)
+      ? fallback.primaryTimetableId
+      : tables[0].id;
+  return { timetables: tables, primaryTimetableId: primary };
+}
+
+function nextTimetableName(list) {
+  const names = new Set((list || []).map((item) => item.name));
+  let n = (list || []).length + 1;
+  while (names.has(`시간표 ${n}`)) n += 1;
+  return `시간표 ${n}`;
+}
+
+function resolveTimetableId(timetableId) {
+  const list = state.timetables || [];
+  if (timetableId && list.some((item) => item.id === timetableId)) return timetableId;
+  if (list.some((item) => item.id === state.primaryTimetableId)) return state.primaryTimetableId;
+  return list[0]?.id || "";
 }
 
 function pruneOrphanTasks(tasks, groups) {
@@ -162,11 +346,27 @@ function isGroupMember(groupId) {
 function mergeSettings(base, extra) {
   const a = { ...defaultSettings(), ...base };
   const b = extra || {};
+  const notes = { ...a.notifications, ...b.notifications };
+  delete notes.dailyReport;
   return {
     ...a,
     ...b,
-    notifications: { ...a.notifications, ...b.notifications },
+    notifications: {
+      groupUpdates: notes.groupUpdates !== false,
+    },
   };
+}
+
+function migrateNotifications(list) {
+  return (Array.isArray(list) ? list : []).filter(
+    (item) => item && item.type !== "daily" && item.title !== "AI 코치",
+  );
+}
+
+function omitRetiredFields(data) {
+  if (!data || typeof data !== "object") return {};
+  const { posts: _posts, dailyReports: _dailyReports, feed: _feed, ...rest } = data;
+  return rest;
 }
 
 export function calcGpa(records, { majorOnly = false } = {}) {
@@ -196,6 +396,7 @@ function seed(now = new Date()) {
 
   const portfolio = uid("page");
   const research = uid("page");
+  const defaultTt = makeTimetable("기본 시간표", []);
 
   return {
     categories: [
@@ -281,7 +482,8 @@ function seed(now = new Date()) {
         color: CATEGORY_COLORS.school,
       },
     ],
-    courses: [],
+    timetables: [defaultTt],
+    primaryTimetableId: defaultTt.id,
     coursePresetColors: defaultCoursePresetColors(),
     customThemePresets: [],
     gradeRecords: [],
@@ -326,7 +528,6 @@ function seed(now = new Date()) {
     currentMemberId: "member-me",
     profile: { nickname: "", photoUrl: "", bio: "" },
     settings: defaultSettings(),
-    posts: [],
     sessions: [
       {
         id: uid("session"),
@@ -372,7 +573,6 @@ function seed(now = new Date()) {
     activeTimer: null,
     auxiliaryTimer: null,
     notifications: [],
-    dailyReports: [],
     meta: {
       lastVisitDate: yesterday,
       focusSection: "timer",
@@ -390,21 +590,24 @@ function load() {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return seededState();
-    const parsed = JSON.parse(raw);
+    const parsed = omitRetiredFields(JSON.parse(raw));
     const base = seed();
+    const { courses: _legacyCourses, ...rest } = parsed;
+    const tt = migrateTimetableState(parsed);
     return {
       ...base,
-      ...parsed,
+      ...rest,
+      ...tt,
       categories: parsed.categories?.length ? parsed.categories : base.categories,
       members: parsed.members?.length ? parsed.members : base.members,
       profile: { nickname: "", photoUrl: "", bio: "", ...base.profile, ...(parsed.profile || {}) },
       settings: mergeSettings(base.settings, parsed.settings),
-      courses: migrateCourses(Array.isArray(parsed.courses) ? parsed.courses : base.courses),
       coursePresetColors: normalizeCoursePresetColors(parsed.coursePresetColors ?? base.coursePresetColors),
       customThemePresets: normalizeCustomThemePresets(parsed.customThemePresets ?? base.customThemePresets),
       gradeRecords: Array.isArray(parsed.gradeRecords) ? parsed.gradeRecords : base.gradeRecords,
-      projects: migrateProjects(Array.isArray(parsed.projects) ? parsed.projects : base.projects),
+      projects: applyAnnotationSidecar(migrateProjects(Array.isArray(parsed.projects) ? parsed.projects : base.projects)),
       tasks: pruneOrphanTasks(parsed.tasks ?? base.tasks, parsed.groups ?? base.groups),
+      notifications: migrateNotifications(parsed.notifications ?? base.notifications),
       meta: { ...base.meta, ...parsed.meta },
     };
   } catch {
@@ -419,15 +622,35 @@ let remoteSave = null;
 
 function persistNow() {
   clearTimeout(persistTimer);
+  persistTimer = 0;
+  const { courses: _legacyCourses, ...clean } = omitRetiredFields(state);
+  const payload = {
+    ...clean,
+    ...migrateTimetableState(state),
+    settings: mergeSettings(defaultSettings(), state.settings),
+    notifications: migrateNotifications(state.notifications),
+  };
+  writeAnnotationSidecar(state.projects);
   try {
-    localStorage.setItem(KEY, JSON.stringify(state));
+    localStorage.setItem(KEY, JSON.stringify(payload));
   } catch {
-    /* quota */
+    /* quota — annotations still live in the sidecar key */
   }
-  remoteSave?.(state);
+  remoteSave?.(payload);
+}
+
+export function flushPersist() {
+  persistNow();
 }
 
 persistNow();
+
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", persistNow);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") persistNow();
+  });
+}
 
 function emit() {
   listeners.forEach((fn) => fn(state));
@@ -449,17 +672,23 @@ export function setRemoteSaver(fn) {
 }
 
 export function replaceState(next) {
+  const incoming = omitRetiredFields(next);
+  const { courses: _legacyCourses, ...rest } = incoming;
+  const tt = migrateTimetableState(incoming, state);
   state = {
     ...seed(),
-    ...next,
-    profile: { nickname: "", photoUrl: "", bio: "", ...state.profile, ...next.profile },
-    settings: mergeSettings(state.settings, next.settings),
-    meta: { ...state.meta, ...next.meta },
-    courses: migrateCourses(next.courses ?? state.courses),
-    coursePresetColors: normalizeCoursePresetColors(next.coursePresetColors ?? state.coursePresetColors),
-    customThemePresets: normalizeCustomThemePresets(next.customThemePresets ?? state.customThemePresets),
-    projects: migrateProjects(next.projects ?? state.projects),
-    tasks: pruneOrphanTasks(next.tasks ?? state.tasks, next.groups ?? state.groups),
+    ...rest,
+    ...tt,
+    profile: { nickname: "", photoUrl: "", bio: "", ...state.profile, ...incoming.profile },
+    settings: mergeSettings(state.settings, incoming.settings),
+    meta: { ...state.meta, ...incoming.meta },
+    coursePresetColors: normalizeCoursePresetColors(incoming.coursePresetColors ?? state.coursePresetColors),
+    customThemePresets: normalizeCustomThemePresets(incoming.customThemePresets ?? state.customThemePresets),
+    projects: applyAnnotationSidecar(
+      mergePdfProjectFields(migrateProjects(incoming.projects ?? state.projects), state.projects),
+    ),
+    tasks: pruneOrphanTasks(incoming.tasks ?? state.tasks, incoming.groups ?? state.groups),
+    notifications: migrateNotifications(incoming.notifications ?? state.notifications),
   };
   emit();
 }
@@ -520,95 +749,6 @@ export function remainingNow(now = Date.now()) {
 
 export function unreadCount() {
   return state.notifications.filter((item) => !item.read).length;
-}
-
-export function analyzeDay(dateKey) {
-  const tasks = tasksOn(dateKey);
-  const sessions = state.sessions.filter((session) => session.date === dateKey);
-  const progress = dayProgress(tasks);
-  const focused = sessions.reduce((sum, session) => sum + session.durationSeconds, 0);
-  const leftover = tasks.filter((task) => task.status !== "completed");
-  const byCategory = state.categories
-    .map((category) => {
-      const seconds = sessions
-        .filter((session) => session.categoryId === category.id)
-        .reduce((sum, session) => sum + session.durationSeconds, 0);
-      return { ...category, seconds };
-    })
-    .filter((item) => item.seconds > 0)
-    .sort((a, b) => b.seconds - a.seconds);
-
-  const longest = [...sessions].sort((a, b) => b.durationSeconds - a.durationSeconds)[0];
-  const switches = sessions.length;
-  let insight = "기록된 집중 세션이 없습니다. 내일은 한 가지 할 일부터 측정을 켜 보세요.";
-  if (focused > 0) {
-    if (progress.percent >= 80 && switches <= 3) {
-      insight = "할 일 이수율과 세션 집중도가 둘 다 높았습니다. 같은 리듬을 유지하세요.";
-    } else if (progress.percent < 50 && focused >= 3600) {
-      insight = "시간은 썼지만 완료로 닫히지 않은 일이 많습니다. 내일은 할 일을 더 잘게 쪼개 보세요.";
-    } else if (switches >= 6) {
-      insight = "세션이 자주 끊겼습니다. 타이머를 켠 뒤 보조 타이머로 한 블록만 지켜 보세요.";
-    } else if (leftover.length) {
-      insight = `미완료 ${leftover.length}건이 남았습니다. 가장 긴 미완료부터 오전에 배치해 보세요.`;
-    } else {
-      insight = "계획한 일을 닫고 측정도 남겼습니다. 내일은 난이도 높은 일을 오전에 두세요.";
-    }
-  }
-
-  return {
-    date: dateKey,
-    progress,
-    focused,
-    leftover: leftover.map((task) => task.title),
-    byCategory,
-    longestTitle: longest?.taskTitle ?? null,
-    longestSeconds: longest?.durationSeconds ?? 0,
-    switches,
-    insight,
-  };
-}
-
-export function localDailyCopy(report) {
-  const pct = report.progress.percent;
-  return {
-    title: `${report.date} 효율 리포트`,
-    headline: `이수율 ${pct}% · 집중 ${Math.round(report.focused / 60)}분`,
-    body: report.insight,
-    leftover: report.leftover,
-    byCategory: report.byCategory,
-  };
-}
-
-export function ingestDailyReport(dateKey, copy) {
-  if (state.dailyReports.some((item) => item.date === dateKey)) return;
-  const report = {
-    id: uid("report"),
-    date: dateKey,
-    createdAt: Date.now(),
-    ...copy,
-  };
-  const notification = {
-    id: uid("note"),
-    type: "daily",
-    reportId: report.id,
-    title: "AI 코치",
-    body: copy.headline,
-    createdAt: Date.now(),
-    read: false,
-  };
-  state = {
-    ...state,
-    dailyReports: [report, ...state.dailyReports],
-    notifications: [notification, ...state.notifications],
-  };
-  emit();
-}
-
-export function markVisit(todayKey) {
-  const prev = state.meta.lastVisitDate;
-  state = { ...state, meta: { ...state.meta, lastVisitDate: todayKey } };
-  emit();
-  return prev && prev !== todayKey ? prev : null;
 }
 
 export function markNotificationsRead() {
@@ -692,7 +832,7 @@ export function deleteEvent(id) {
   emit();
 }
 
-export function addCourse(input) {
+export function addCourse(input, timetableId) {
   const course = {
     id: uid("course"),
     title: String(input.title || "").trim(),
@@ -702,7 +842,13 @@ export function addCourse(input) {
     memo: String(input.memo || "").trim(),
     slots: normalizeSlots(input.slots),
   };
-  state = { ...state, courses: [...(state.courses || []), course] };
+  const target = resolveTimetableId(timetableId);
+  state = {
+    ...state,
+    timetables: (state.timetables || []).map((item) =>
+      item.id === target ? { ...item, courses: [...item.courses, course] } : item,
+    ),
+  };
   emit();
   return course;
 }
@@ -710,23 +856,102 @@ export function addCourse(input) {
 export function updateCourse(id, changes) {
   state = {
     ...state,
-    courses: (state.courses || []).map((course) => {
-      if (course.id !== id) return course;
-      const next = { ...course, ...changes };
-      if (changes.title != null) next.title = String(changes.title).trim();
-      if (changes.professor != null) next.professor = String(changes.professor).trim();
-      if (changes.room != null) next.room = String(changes.room).trim();
-      if (changes.memo != null) next.memo = String(changes.memo).trim();
-      if (changes.slots != null) next.slots = normalizeSlots(changes.slots);
-      return next;
-    }),
+    timetables: (state.timetables || []).map((item) => ({
+      ...item,
+      courses: item.courses.map((course) => {
+        if (course.id !== id) return course;
+        const next = { ...course, ...changes };
+        if (changes.title != null) next.title = String(changes.title).trim();
+        if (changes.professor != null) next.professor = String(changes.professor).trim();
+        if (changes.room != null) next.room = String(changes.room).trim();
+        if (changes.memo != null) next.memo = String(changes.memo).trim();
+        if (changes.slots != null) next.slots = normalizeSlots(changes.slots);
+        return next;
+      }),
+    })),
   };
   emit();
 }
 
 export function deleteCourse(id) {
-  state = { ...state, courses: (state.courses || []).filter((course) => course.id !== id) };
+  state = {
+    ...state,
+    timetables: (state.timetables || []).map((item) => ({
+      ...item,
+      courses: item.courses.filter((course) => course.id !== id),
+    })),
+  };
   emit();
+}
+
+export function getTimetables() {
+  return state.timetables || [];
+}
+
+export function primaryTimetable() {
+  const list = state.timetables || [];
+  return list.find((item) => item.id === state.primaryTimetableId) || list[0] || makeTimetable("기본 시간표", []);
+}
+
+export function primaryCourses() {
+  return primaryTimetable().courses || [];
+}
+
+export function coursesIn(timetableId) {
+  const list = state.timetables || [];
+  const found = list.find((item) => item.id === timetableId);
+  return (found || primaryTimetable()).courses || [];
+}
+
+export function courseById(id) {
+  for (const item of state.timetables || []) {
+    const course = item.courses.find((entry) => entry.id === id);
+    if (course) return course;
+  }
+  return null;
+}
+
+export function timetableIdForCourse(id) {
+  for (const item of state.timetables || []) {
+    if (item.courses.some((entry) => entry.id === id)) return item.id;
+  }
+  return "";
+}
+
+export function addTimetable(name) {
+  const list = state.timetables || [];
+  const tt = makeTimetable(String(name || "").trim() || nextTimetableName(list), []);
+  state = { ...state, timetables: [...list, tt] };
+  emit();
+  return tt;
+}
+
+export function renameTimetable(id, name) {
+  const next = String(name || "").trim();
+  if (!next) return;
+  state = {
+    ...state,
+    timetables: (state.timetables || []).map((item) => (item.id === id ? { ...item, name: next } : item)),
+  };
+  emit();
+}
+
+export function setPrimaryTimetable(id) {
+  if (!(state.timetables || []).some((item) => item.id === id)) return false;
+  state = { ...state, primaryTimetableId: id };
+  emit();
+  return true;
+}
+
+export function deleteTimetable(id) {
+  const list = state.timetables || [];
+  if (list.length <= 1) return false;
+  const next = list.filter((item) => item.id !== id);
+  if (!next.length) return false;
+  const primary = next.some((item) => item.id === state.primaryTimetableId) ? state.primaryTimetableId : next[0].id;
+  state = { ...state, timetables: next, primaryTimetableId: primary };
+  emit();
+  return true;
 }
 
 export function addCoursePresetColor(color) {
@@ -972,6 +1197,8 @@ export function addPage({
     page.pdfName = pdfName || "";
     page.pdfSize = Number(pdfSize) || 0;
     page.pdfPage = Math.max(1, Number(pdfPage) || 1);
+    page.pdfAnnotations = normalizePdfAnnotations({});
+    page.pdfNotes = "";
   }
   state = { ...state, projects: [...state.projects, page] };
   emit();
@@ -1124,39 +1351,6 @@ export function leaveGroup(groupId) {
         : group,
     ),
     tasks: state.tasks.filter((task) => task.groupId !== groupId),
-  };
-  emit();
-}
-
-export function addPost(input) {
-  const post = {
-    id: uid("post"),
-    groupId: input.groupId,
-    authorId: state.currentMemberId,
-    categoryId: input.categoryId,
-    imageUri: input.imageUri,
-    caption: input.caption || "",
-    createdAt: Date.now(),
-    reactions: [],
-  };
-  state = { ...state, posts: [post, ...state.posts] };
-  emit();
-}
-
-export function toggleReaction(postId, emoji) {
-  const userId = state.currentMemberId;
-  state = {
-    ...state,
-    posts: state.posts.map((post) => {
-      if (post.id !== postId) return post;
-      const has = post.reactions.some((item) => item.emoji === emoji && item.userId === userId);
-      return {
-        ...post,
-        reactions: has
-          ? post.reactions.filter((item) => !(item.emoji === emoji && item.userId === userId))
-          : [...post.reactions, { emoji, userId }],
-      };
-    }),
   };
   emit();
 }
