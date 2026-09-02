@@ -85,6 +85,7 @@ const ui = {
   modal: null,
   authMode: "signup",
   authReady: false,
+  accountReady: false,
   authNotice: "",
   onboarding: false,
   toast: null,
@@ -371,8 +372,7 @@ function ensureRemoteProfiles() {
     .fetchGroupBundle()
     .then((data) => {
       if (gen !== bundleGen) return;
-      remoteProfiles = Array.isArray(data?.profiles) ? data.profiles : [];
-      applyIncomingPolls(data?.polls);
+      if (data) applyGroupBundle(data);
     })
     .catch(() => {
       if (gen !== bundleGen) return;
@@ -399,6 +399,43 @@ function refreshGroupBundle() {
   profilesReady = false;
   profilesRequest = null;
   ensureRemoteProfiles();
+}
+
+function applyGroupBundle(data) {
+  remoteProfiles = Array.isArray(data?.profiles) ? data.profiles : [];
+  applyIncomingPolls(data?.polls);
+  const uid = auth.user()?.id;
+  const incoming = Array.isArray(data?.groups) ? data.groups : [];
+  store.setGroups(uid ? incoming.filter((group) => (group.memberIds || []).includes(uid)) : []);
+}
+
+async function hydrateAccount() {
+  const user = auth.user();
+  ui.accountReady = false;
+  if (!user) {
+    store.bindAccount(null);
+    return;
+  }
+  store.bindAccount(user.id);
+  store.setPersistEnabled(false);
+  try {
+    const remote = await auth.pullRemote().catch(() => null);
+    if (remote?.payload) store.replaceState(remote.payload);
+    store.setCurrentMemberId(user.id);
+    const data = await auth.fetchGroupBundle().catch(() => null);
+    if (data) {
+      bundleGen += 1;
+      profilesReady = true;
+      profilesRequest = null;
+      applyGroupBundle(data);
+    } else {
+      store.setGroups((store.getState().groups || []).filter((group) => (group.memberIds || []).includes(user.id)));
+    }
+  } finally {
+    store.setPersistEnabled(true);
+    store.flushPersist();
+    ui.accountReady = true;
+  }
 }
 
 function maybeSyncTimetable({ empty = false, refresh = false } = {}) {
@@ -558,7 +595,7 @@ function viewToday(embedded = false) {
   }
   const extra = `<button class="ghost" data-act="go-categories">${icon("settings", 14)} 카테고리 관리</button>${dateNav("today")}`;
   return `
-    ${top("To-do List", formatShortKoreanDate(ui.date), extra)}
+    ${top("오늘 할 일", formatShortKoreanDate(ui.date), extra)}
     <div class="today-split">
       <div class="today-split-list">${list}</div>
       ${viewTodaySchedule()}
@@ -640,20 +677,20 @@ function viewTimer(embedded = false) {
         </div>
         <div class="night-controls">
           <button class="night-pause" data-act="${s.activeTimer.isRunning ? "pause" : "resume"}" aria-label="${s.activeTimer.isRunning ? "일시정지" : "재개"}">${s.activeTimer.isRunning ? icon("pause", 26) : icon("play", 26)}</button>
-          <button class="night-stop" data-act="finish">${icon("stop", 18)} 업무 종료</button>
+          <button class="night-stop" data-act="finish">${icon("stop", 18)} 측정 종료</button>
         </div>
         ${auxPanel(aux, remain)}
       </div>`;
   }
   return `
-    ${embedded ? "" : top("Timer", "할 일을 고른 뒤 원형 타이머가 채워집니다")}
+    ${embedded ? "" : top("타이머", "할 일을 고른 뒤 원형 타이머가 채워집니다")}
     <div class="ring-wrap">
       <div class="ring">
         ${ringSvg(progress)}
         <div class="ring-face">
           <div>
             <div class="ring-time" data-clock="main">${face}</div>
-            <div class="ring-sub">To-do에서 할 일을 측정하세요</div>
+            <div class="ring-sub">오늘 할 일에서 재생을 눌러 측정하세요</div>
           </div>
         </div>
       </div>
@@ -678,7 +715,7 @@ function viewTimeline() {
     .filter((group) => group.tasks.length > 0 || group.seconds > 0);
   const hours = Array.from({ length: 25 }, (_, hour) => hour);
   return `
-    ${top("Timeline", formatShortKoreanDate(ui.timeline), dateNav("timeline"))}
+    ${top("타임라인", formatShortKoreanDate(ui.timeline), dateNav("timeline"))}
     <div class="tl-head">
       <span>분 단위 집중 기록</span>
       <b>${formatDuration(total)}</b>
@@ -716,7 +753,7 @@ function viewTimeline() {
                   </section>`;
                 })
                 .join("")
-            : `<div class="empty"><b>등록된 할 일 없음</b><p>To-do List에 할 일을 추가해보세요.</p></div>`
+            : `<div class="empty"><b>아직 할 일이 없습니다</b><p>오늘 할 일에 할 일을 추가하면 여기에 기록이 쌓입니다.</p></div>`
         }
         <div class="task-meta" style="padding:12px 4px">전체 할 일 ${dayTasks.length}개</div>
       </div>
@@ -751,7 +788,7 @@ function viewCalendar() {
   const week = ["일", "월", "화", "수", "목", "금", "토"];
   const s = store.getState();
   return `
-    ${top("Calendar", `${ui.month.getFullYear()}년 ${ui.month.getMonth() + 1}월`, `
+    ${top("캘린더", `${ui.month.getFullYear()}년 ${ui.month.getMonth() + 1}월`, `
       <button class="ghost" data-act="month-prev">${icon("chevronLeft")}</button>
       <button class="ghost" data-act="cal-today">오늘</button>
       <button class="ghost" data-act="month-next">${icon("chevronRight")}</button>
@@ -2380,7 +2417,8 @@ function viewProjects(pageId) {
 function viewGroups(groupId) {
   ensureRemoteProfiles();
   const s = store.getState();
-  const mine = s.groups.filter((group) => group.memberIds.includes(s.currentMemberId));
+  const uid = auth.user()?.id;
+  const mine = s.groups.filter((group) => uid && (group.memberIds || []).includes(uid));
   const group = mine.find((item) => item.id === groupId);
   if (!group) {
     return `
@@ -2979,7 +3017,7 @@ function liveMeasure() {
       <div class="live-clock" data-clock="desk">${clock(store.elapsedNow())}</div>
       <div class="night-controls">
         <button class="night-pause" data-act="${s.activeTimer.isRunning ? "pause" : "resume"}" aria-label="${s.activeTimer.isRunning ? "일시정지" : "재개"}">${s.activeTimer.isRunning ? icon("pause", 22) : icon("play", 22)}</button>
-        <button class="night-stop" data-act="finish">${icon("stop", 16)} 업무 종료</button>
+        <button class="night-stop" data-act="finish">${icon("stop", 16)} 측정 종료</button>
       </div>
     </section>`;
 }
@@ -3384,6 +3422,10 @@ export function render() {
       const email = document.querySelector(".auth-gate [name='email']");
       if (email && document.activeElement === document.body) email.focus();
     });
+    return;
+  }
+  if (!ui.accountReady) {
+    root.innerHTML = authLoadingHtml();
     return;
   }
   if (ui.onboarding && parseHash().name !== "profile") {
@@ -5391,8 +5433,18 @@ function onClick(event) {
     } else {
       const name = prompt("그룹 이름");
       if (!name) return;
-      const group = store.createGroup(name);
-      go(`/groups/${group.id}`);
+      auth
+        .createGroup(name)
+        .then((result) => {
+          if (!result?.group) throw new Error("empty-group");
+          store.upsertGroup(result.group);
+          go(`/groups/${result.group.id}`);
+          render();
+        })
+        .catch(() => {
+          alert("그룹을 만들지 못했어요. 잠시 후 다시 시도해주세요.");
+        });
+      return;
     }
   } else if (act === "join-group") {
     if (!requireLoginForGroups()) {
@@ -5402,22 +5454,38 @@ function onClick(event) {
     } else {
       const code = prompt("초대 코드");
       if (!code) return;
-      const result = store.joinGroup(code);
-      if (!result.ok) {
-        alert(
-          result.reason === "rejected"
-            ? "초대를 거부하도록 설정되어 있습니다. 참여하려면 개인정보 보호 설정을 먼저 꺼주세요"
-            : result.reason === "full"
-              ? "정원이 가득 찼습니다."
-              : "코드를 찾을 수 없습니다.",
-        );
-        return;
-      }
-      go(`/groups/${result.group.id}`);
+      auth
+        .joinGroup(code)
+        .then((result) => {
+          if (!result?.ok || !result?.group) {
+            alert(
+              result?.reason === "full"
+                ? "정원이 가득 찼습니다."
+                : "코드를 찾을 수 없습니다.",
+            );
+            return;
+          }
+          store.upsertGroup(result.group);
+          go(`/groups/${result.group.id}`);
+          render();
+        })
+        .catch(() => {
+          alert("그룹에 참여하지 못했어요. 코드를 확인해주세요.");
+        });
+      return;
     }
   } else if (act === "leave-group") {
-    store.leaveGroup(id);
-    go("/groups");
+    auth
+      .leaveGroup(id)
+      .then(() => {
+        store.leaveGroup(id);
+        go("/groups");
+        render();
+      })
+      .catch(() => {
+        alert("그룹에서 나가지 못했어요. 잠시 후 다시 시도해주세요.");
+      });
+    return;
   } else if (act === "settings-tab") ui.settingsTab = actEl.dataset.tab || "account";
   else if (act === "set-font-size") {
     store.updateSettings({ fontSize: actEl.dataset.size || "md" });
@@ -5506,6 +5574,8 @@ function onClick(event) {
       ui.authNotice = "";
       ui.authMode = "login";
       ui.modal = null;
+      ui.accountReady = false;
+      store.flushPersist();
       auth.logout();
     }
   } else if (act === "auth-mode") {
@@ -6147,9 +6217,10 @@ async function boot() {
   ui.authReady = true;
   store.setRemoteSaver((payload) => auth.pushRemote(payload).catch(() => {}));
   if (auth.user()) {
-    const remote = await auth.pullRemote().catch(() => null);
-    if (remote?.payload) store.replaceState(remote.payload);
+    await hydrateAccount();
     if (!location.hash || location.hash === "#") location.hash = "#/today";
+  } else {
+    store.bindAccount(null);
   }
   await registerCustomFont(store.getState().settings?.customFont);
   applyAppearance();
@@ -6166,10 +6237,15 @@ async function boot() {
     if (!auth.user()) {
       ui.onboarding = false;
       ui.modal = null;
-    } else {
-      maybeSyncTimetable();
+      ui.accountReady = false;
+      store.bindAccount(null);
+      render();
+      return;
     }
-    render();
+    hydrateAccount().then(() => {
+      maybeSyncTimetable();
+      render();
+    });
   });
   document.addEventListener("click", onClick);
   document.addEventListener("submit", onSubmit);

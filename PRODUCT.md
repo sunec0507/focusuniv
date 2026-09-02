@@ -17,4 +17,4 @@ Korean UI. Short, specific, no cheerleading. Controls name the action.
 
 - Static HTML/CSS/JS client. Netlify Functions + Identity + Database + AI Gateway.
 - Visual world is canon operate: Todoist, Apple Reminders, Linear. Cool gray `#f6f7f9`, rail `#eceef2`, accent `#2563EB`, Pretendard, 8px radius, hairline lists.
-- No emoji as chrome icons. Seed tasks are labeled as example data.
+- No emoji as chrome icons. New accounts start empty; categories and one blank timetable are the only defaults.

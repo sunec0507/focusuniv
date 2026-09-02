@@ -168,8 +168,32 @@ async function postGroup(action, payload) {
     headers: { "Content-Type": "application/json", ...(await authHeader()) },
     body: JSON.stringify({ action, ...payload }),
   });
-  if (!response.ok) throw new Error("groups-unavailable");
-  return response.json();
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const err = new Error(data?.reason || data?.error || "groups-unavailable");
+    err.status = response.status;
+    err.reason = data?.reason || data?.error;
+    throw err;
+  }
+  return data;
+}
+
+export async function createGroup(name) {
+  return postGroup("create", { name });
+}
+
+export async function joinGroup(code) {
+  try {
+    return await postGroup("join", { code });
+  } catch (err) {
+    if (err?.status === 404) return { ok: false, reason: "missing" };
+    if (err?.status === 409) return { ok: false, reason: "full" };
+    throw err;
+  }
+}
+
+export async function leaveGroup(groupId) {
+  return postGroup("leave", { groupId });
 }
 
 export async function syncTimetable(courses) {

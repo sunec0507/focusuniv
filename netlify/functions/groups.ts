@@ -101,6 +101,19 @@ export default async (req: Request, _context: Context) => {
     return json({ ok: true, group: { ...group, memberIds } });
   }
 
+  if (body.action === "leave") {
+    const groupId = String(body.groupId || body.id || "");
+    if (!groupId) return json({ error: "missing" }, 400);
+    const [group] = await db.select().from(groups).where(eq(groups.id, groupId)).limit(1);
+    if (!group) return json({ error: "missing" }, 404);
+    const memberIds = Array.isArray(group.memberIds) ? group.memberIds.filter((id) => id !== user.id) : [];
+    if (memberIds.length === (Array.isArray(group.memberIds) ? group.memberIds.length : 0) && !isMember(group, user.id)) {
+      return json({ error: "forbidden" }, 403);
+    }
+    await db.update(groups).set({ memberIds }).where(eq(groups.id, group.id));
+    return json({ ok: true, id: groupId });
+  }
+
   if (body.action === "sync-timetable") {
     const busySlots = toBusySlots(body.courses);
     const [existing] = await db.select().from(profiles).where(eq(profiles.userId, user.id)).limit(1);

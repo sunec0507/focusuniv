@@ -1,5 +1,4 @@
 import {
-  addDays,
   auxiliaryRemaining,
   dayProgress,
   focusElapsed,
@@ -152,6 +151,17 @@ function mergePdfProjectFields(incoming, local) {
 
 const ANN_KEY = "focus-web-v1-pdf-ann";
 
+let activeUserId = null;
+let persistEnabled = true;
+
+function storageKey(userId = activeUserId) {
+  return userId ? `${KEY}:${userId}` : "";
+}
+
+function annotationKey(userId = activeUserId) {
+  return userId ? `${ANN_KEY}:${userId}` : "";
+}
+
 function annotationSidecar(projects) {
   const out = {};
   for (const page of Array.isArray(projects) ? projects : []) {
@@ -163,16 +173,20 @@ function annotationSidecar(projects) {
 }
 
 function writeAnnotationSidecar(projects) {
+  const key = annotationKey();
+  if (!key) return;
   try {
-    localStorage.setItem(ANN_KEY, JSON.stringify(annotationSidecar(projects)));
+    localStorage.setItem(key, JSON.stringify(annotationSidecar(projects)));
   } catch {
     /* quota */
   }
 }
 
 function readAnnotationSidecar() {
+  const key = annotationKey();
+  if (!key) return {};
   try {
-    const raw = JSON.parse(localStorage.getItem(ANN_KEY) || "{}");
+    const raw = JSON.parse(localStorage.getItem(key) || "{}");
     return raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
   } catch {
     return {};
@@ -391,11 +405,6 @@ function inviteCode(existing) {
 
 function seed(now = new Date()) {
   const today = formatDateKey(now);
-  const yesterday = formatDateKey(addDays(now, -1));
-  const yStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 9, 12).getTime();
-
-  const portfolio = uid("page");
-  const research = uid("page");
   const defaultTt = makeTimetable("기본 시간표", []);
 
   return {
@@ -405,176 +414,25 @@ function seed(now = new Date()) {
       { id: "personal", name: "개인 프로젝트", color: CATEGORY_COLORS.personal },
       { id: "exercise", name: "운동", color: CATEGORY_COLORS.exercise },
     ],
-    tasks: [
-      {
-        id: uid("task"),
-        title: "전공 수업 복습",
-        note: "3장까지 정리하기 · 예시 데이터",
-        categoryId: "school",
-        scheduledDate: today,
-        status: "todo",
-        focusedSeconds: 0,
-      },
-      {
-        id: uid("task"),
-        title: "발표 자료 조사",
-        note: "국내 사례 3개 · 예시 데이터",
-        categoryId: "school",
-        scheduledDate: today,
-        status: "todo",
-        focusedSeconds: 900,
-      },
-      {
-        id: uid("task"),
-        title: "포트폴리오 수정",
-        note: "프로젝트 설명 추가 · 예시 데이터",
-        categoryId: "personal",
-        projectId: portfolio,
-        scheduledDate: today,
-        status: "completed",
-        focusedSeconds: 1800,
-      },
-      {
-        id: uid("task"),
-        title: "저녁 운동",
-        note: "러닝 30분 · 예시 데이터",
-        categoryId: "exercise",
-        scheduledDate: today,
-        status: "todo",
-        focusedSeconds: 0,
-      },
-      {
-        id: uid("task"),
-        title: "논문 초고 읽기",
-        note: "어제 기록 · 예시 데이터",
-        categoryId: "school",
-        scheduledDate: yesterday,
-        status: "completed",
-        focusedSeconds: 5400,
-      },
-      {
-        id: uid("task"),
-        title: "그룹 과제 초안",
-        note: "어제 미완료 · 예시 데이터",
-        categoryId: "work",
-        scheduledDate: yesterday,
-        status: "todo",
-        focusedSeconds: 1200,
-      },
-      {
-        id: uid("task"),
-        title: "헬스장",
-        note: "어제 완료 · 예시 데이터",
-        categoryId: "exercise",
-        scheduledDate: yesterday,
-        status: "completed",
-        focusedSeconds: 2400,
-      },
-    ],
-    events: [
-      {
-        id: uid("event"),
-        title: "전공 세미나",
-        note: "예시 일정",
-        date: today,
-        startTime: "14:00",
-        endTime: "15:30",
-        color: CATEGORY_COLORS.school,
-      },
-    ],
+    tasks: [],
+    events: [],
     timetables: [defaultTt],
     primaryTimetableId: defaultTt.id,
     coursePresetColors: defaultCoursePresetColors(),
     customThemePresets: [],
     gradeRecords: [],
-    projects: [
-      {
-        id: portfolio,
-        parentId: null,
-        name: "졸업 포트폴리오",
-        color: CATEGORY_COLORS.personal,
-        icon: "F",
-        type: "folder",
-        blocks: [],
-        createdAt: Date.now() - 86400000 * 4,
-        updatedAt: Date.now(),
-      },
-      {
-        id: research,
-        parentId: portfolio,
-        name: "사례 조사",
-        color: CATEGORY_COLORS.school,
-        icon: "R",
-        type: "page",
-        blocks: [
-          { id: uid("block"), type: "heading", text: "사례 조사" },
-          { id: uid("block"), type: "paragraph", text: "국내 졸업전시 세 곳을 비교한다." },
-          {
-            id: uid("block"),
-            type: "table",
-            headers: ["학교", "형식", "메모"],
-            rows: [
-              ["홍익", "북렛", "타이포가 강함"],
-              ["국민", "웹", "모션 중심"],
-            ],
-          },
-        ],
-        createdAt: Date.now() - 86400000 * 2,
-        updatedAt: Date.now(),
-      },
-    ],
+    projects: [],
     groups: [],
     members: [{ id: "member-me", name: "나" }],
     currentMemberId: "member-me",
     profile: { nickname: "", photoUrl: "", bio: "" },
     settings: defaultSettings(),
-    sessions: [
-      {
-        id: uid("session"),
-        taskId: "seed-today",
-        taskTitle: "발표 자료 조사",
-        categoryId: "school",
-        startTime: new Date(now.getFullYear(), now.getMonth(), now.getDate(), 10, 12).getTime(),
-        endTime: new Date(now.getFullYear(), now.getMonth(), now.getDate(), 10, 27).getTime(),
-        durationSeconds: 900,
-        date: today,
-      },
-      {
-        id: uid("session"),
-        taskId: "seed-y1",
-        taskTitle: "논문 초고 읽기",
-        categoryId: "school",
-        startTime: yStart,
-        endTime: yStart + 5400 * 1000,
-        durationSeconds: 5400,
-        date: yesterday,
-      },
-      {
-        id: uid("session"),
-        taskId: "seed-y2",
-        taskTitle: "그룹 과제 초안",
-        categoryId: "work",
-        startTime: yStart + 6 * 3600 * 1000,
-        endTime: yStart + 6 * 3600 * 1000 + 1200 * 1000,
-        durationSeconds: 1200,
-        date: yesterday,
-      },
-      {
-        id: uid("session"),
-        taskId: "seed-y3",
-        taskTitle: "헬스장",
-        categoryId: "exercise",
-        startTime: yStart + 10 * 3600 * 1000,
-        endTime: yStart + 10 * 3600 * 1000 + 2400 * 1000,
-        durationSeconds: 2400,
-        date: yesterday,
-      },
-    ],
+    sessions: [],
     activeTimer: null,
     auxiliaryTimer: null,
     notifications: [],
     meta: {
-      lastVisitDate: yesterday,
+      lastVisitDate: today,
       focusSection: "timer",
       selectedDate: today,
     },
@@ -586,36 +444,30 @@ function seededState() {
   return { ...base, projects: migrateProjects(base.projects) };
 }
 
-function load() {
-  try {
-    const raw = localStorage.getItem(KEY);
-    if (!raw) return seededState();
-    const parsed = omitRetiredFields(JSON.parse(raw));
-    const base = seed();
-    const { courses: _legacyCourses, ...rest } = parsed;
-    const tt = migrateTimetableState(parsed);
-    return {
-      ...base,
-      ...rest,
-      ...tt,
-      categories: parsed.categories?.length ? parsed.categories : base.categories,
-      members: parsed.members?.length ? parsed.members : base.members,
-      profile: { nickname: "", photoUrl: "", bio: "", ...base.profile, ...(parsed.profile || {}) },
-      settings: mergeSettings(base.settings, parsed.settings),
-      coursePresetColors: normalizeCoursePresetColors(parsed.coursePresetColors ?? base.coursePresetColors),
-      customThemePresets: normalizeCustomThemePresets(parsed.customThemePresets ?? base.customThemePresets),
-      gradeRecords: Array.isArray(parsed.gradeRecords) ? parsed.gradeRecords : base.gradeRecords,
-      projects: applyAnnotationSidecar(migrateProjects(Array.isArray(parsed.projects) ? parsed.projects : base.projects)),
-      tasks: pruneOrphanTasks(parsed.tasks ?? base.tasks, parsed.groups ?? base.groups),
-      notifications: migrateNotifications(parsed.notifications ?? base.notifications),
-      meta: { ...base.meta, ...parsed.meta },
-    };
-  } catch {
-    return seededState();
-  }
+function stateFromRaw(raw) {
+  const parsed = omitRetiredFields(typeof raw === "string" ? JSON.parse(raw) : raw);
+  const base = seed();
+  const { courses: _legacyCourses, ...rest } = parsed;
+  const tt = migrateTimetableState(parsed);
+  return {
+    ...base,
+    ...rest,
+    ...tt,
+    categories: parsed.categories?.length ? parsed.categories : base.categories,
+    members: parsed.members?.length ? parsed.members : base.members,
+    profile: { nickname: "", photoUrl: "", bio: "", ...base.profile, ...(parsed.profile || {}) },
+    settings: mergeSettings(base.settings, parsed.settings),
+    coursePresetColors: normalizeCoursePresetColors(parsed.coursePresetColors ?? base.coursePresetColors),
+    customThemePresets: normalizeCustomThemePresets(parsed.customThemePresets ?? base.customThemePresets),
+    gradeRecords: Array.isArray(parsed.gradeRecords) ? parsed.gradeRecords : base.gradeRecords,
+    projects: applyAnnotationSidecar(migrateProjects(Array.isArray(parsed.projects) ? parsed.projects : base.projects)),
+    tasks: pruneOrphanTasks(parsed.tasks ?? base.tasks, parsed.groups ?? base.groups),
+    notifications: migrateNotifications(parsed.notifications ?? base.notifications),
+    meta: { ...base.meta, ...parsed.meta },
+  };
 }
 
-let state = load();
+let state = seededState();
 const listeners = new Set();
 let persistTimer = 0;
 let remoteSave = null;
@@ -623,16 +475,21 @@ let remoteSave = null;
 function persistNow() {
   clearTimeout(persistTimer);
   persistTimer = 0;
-  const { courses: _legacyCourses, ...clean } = omitRetiredFields(state);
+  if (!persistEnabled || !activeUserId) return;
+  const { courses: _legacyCourses, groups: _groups, ...clean } = omitRetiredFields(state);
   const payload = {
     ...clean,
     ...migrateTimetableState(state),
+    groups: [],
+    currentMemberId: activeUserId,
     settings: mergeSettings(defaultSettings(), state.settings),
     notifications: migrateNotifications(state.notifications),
   };
+  const localPayload = { ...payload, groups: Array.isArray(state.groups) ? state.groups : [] };
   writeAnnotationSidecar(state.projects);
+  const key = storageKey();
   try {
-    localStorage.setItem(KEY, JSON.stringify(payload));
+    if (key) localStorage.setItem(key, JSON.stringify(localPayload));
   } catch {
     /* quota — annotations still live in the sidecar key */
   }
@@ -643,7 +500,57 @@ export function flushPersist() {
   persistNow();
 }
 
-persistNow();
+export function setPersistEnabled(on) {
+  persistEnabled = Boolean(on);
+}
+
+export function bindAccount(userId) {
+  const next = userId ? String(userId) : "";
+  if (activeUserId && activeUserId !== next) persistNow();
+  activeUserId = next || null;
+  if (!activeUserId) {
+    state = seededState();
+    listeners.forEach((fn) => fn(state));
+    return;
+  }
+  try {
+    const raw = localStorage.getItem(storageKey());
+    state = raw ? stateFromRaw(raw) : seededState();
+  } catch {
+    state = seededState();
+  }
+  state = { ...state, currentMemberId: activeUserId };
+  listeners.forEach((fn) => fn(state));
+}
+
+export function setCurrentMemberId(id) {
+  const next = String(id || "");
+  if (!next || state.currentMemberId === next) return;
+  state = { ...state, currentMemberId: next };
+  emit();
+}
+
+export function setGroups(groups) {
+  const list = Array.isArray(groups) ? groups : [];
+  state = {
+    ...state,
+    groups: list,
+    tasks: pruneOrphanTasks(state.tasks, list),
+  };
+  emit();
+}
+
+export function upsertGroup(group) {
+  if (!group?.id) return null;
+  const idx = state.groups.findIndex((item) => item.id === group.id);
+  const groups =
+    idx >= 0
+      ? state.groups.map((item) => (item.id === group.id ? { ...item, ...group } : item))
+      : [group, ...state.groups];
+  state = { ...state, groups };
+  emit();
+  return group;
+}
 
 if (typeof window !== "undefined") {
   window.addEventListener("pagehide", persistNow);
@@ -689,6 +596,7 @@ export function replaceState(next) {
     ),
     tasks: pruneOrphanTasks(incoming.tasks ?? state.tasks, incoming.groups ?? state.groups),
     notifications: migrateNotifications(incoming.notifications ?? state.notifications),
+    currentMemberId: activeUserId || incoming.currentMemberId || state.currentMemberId,
   };
   emit();
 }
@@ -1350,11 +1258,7 @@ export function joinGroup(code) {
 export function leaveGroup(groupId) {
   state = {
     ...state,
-    groups: state.groups.map((group) =>
-      group.id === groupId
-        ? { ...group, memberIds: group.memberIds.filter((id) => id !== state.currentMemberId) }
-        : group,
-    ),
+    groups: state.groups.filter((group) => group.id !== groupId),
     tasks: state.tasks.filter((task) => task.groupId !== groupId),
   };
   emit();
