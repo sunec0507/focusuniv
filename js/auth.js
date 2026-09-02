@@ -123,13 +123,14 @@ export async function login(email, password) {
 }
 
 export async function logout() {
+  currentUser = null;
+  emit();
   try {
     await identityLogout();
   } catch (err) {
     console.error("[auth] 로그아웃 실패:", err);
   }
   currentUser = null;
-  emit();
 }
 
 export async function authHeader() {

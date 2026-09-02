@@ -83,7 +83,10 @@ const ui = {
   slash: null,
   panel: false,
   modal: null,
-  authMode: "login",
+  authMode: "signup",
+  authReady: false,
+  authNotice: "",
+  onboarding: false,
   toast: null,
   auxMinutes: "30",
   addingCategory: null,
@@ -241,8 +244,8 @@ function side(active) {
         <a class="side-foot-link ${active === "profile" ? "active" : ""}" href="#/profile">${icon("user", 16)} 프로필</a>
         <a class="side-foot-link ${active === "settings" ? "active" : ""}" href="#/settings">${icon("sliders", 16)} 설정</a>
         <div class="account">
-          <span>${escapeHtml(me?.email || me?.user_metadata?.name || "로컬로 사용 중")}</span>
-          <button class="ghost" data-act="auth">${me ? "로그아웃" : "로그인"}</button>
+          <span>${escapeHtml(me?.email || me?.user_metadata?.name || "계정")}</span>
+          <button class="ghost" data-act="auth">로그아웃</button>
         </div>
       </div>
     </aside>`;
@@ -2631,7 +2634,8 @@ function viewProfile() {
   return `
     <div class="profile-page">
       <form class="profile-card" data-act="save-profile">
-        <h1 class="profile-title">프로필</h1>
+        <h1 class="profile-title">${ui.onboarding ? "프로필 설정" : "프로필"}</h1>
+        ${ui.onboarding ? `<p class="page-date">이름을 저장하면 오늘 할 일로 이동합니다.</p>` : ""}
         <div class="profile-avatar" data-profile-avatar>
           ${photoUrl ? `<img src="${escapeHtml(photoUrl)}" alt="">` : `<span>${escapeHtml(profileInitial(nick))}</span>`}
         </div>
@@ -2652,7 +2656,7 @@ function viewProfile() {
         <label>아이디
           <input class="field" value="${escapeHtml(account)}" readonly>
         </label>
-        <button class="primary" type="submit">저장</button>
+        <button class="primary" type="submit">${ui.onboarding ? "시작하기" : "저장"}</button>
       </form>
     </div>`;
 }
@@ -3119,24 +3123,52 @@ function viewFocus(section) {
     </div>`;
 }
 
-function modalHtml() {
-  if (!ui.modal) return "";
-  if (ui.modal === "auth") {
-    const signup = ui.authMode === "signup";
-    return `<div class="modal-back" data-act="close-modal"><div class="modal" data-stop="1">
-      <h2>${signup ? "회원가입" : "로그인"}</h2>
+function authFormHtml() {
+  const signup = ui.authMode === "signup";
+  const notice = String(ui.authNotice || "").trim();
+  return `
       <div class="auth-modes">
         <button class="ghost ${signup ? "" : "on"}" type="button" data-act="auth-mode" data-mode="login">로그인</button>
         <button class="ghost ${signup ? "on" : ""}" type="button" data-act="auth-mode" data-mode="signup">회원가입</button>
       </div>
+      ${notice ? `<p class="auth-gate-notice">${escapeHtml(notice)}</p>` : ""}
       <form class="stack" data-act="${signup ? "signup" : "login"}">
         <input class="field" name="email" type="email" placeholder="이메일" required autocomplete="email">
         <input class="field" name="password" type="password" placeholder="${signup ? "비밀번호 (6자 이상)" : "비밀번호"}" required minlength="6" autocomplete="${signup ? "new-password" : "current-password"}">
         ${signup ? `<input class="field" name="name" placeholder="이름" required autocomplete="name">` : ""}
         <button class="primary" type="submit">${signup ? "가입하기" : "로그인"}</button>
-      </form>
-    </div></div>`;
-  }
+      </form>`;
+}
+
+function authLoadingHtml() {
+  return `<div class="auth-gate" aria-busy="true" aria-live="polite">
+    <div class="auth-gate-card">
+      <div class="auth-spin" aria-hidden="true"></div>
+      <p class="page-date">불러오는 중</p>
+    </div>
+  </div>`;
+}
+
+function authGateHtml() {
+  const signup = ui.authMode === "signup";
+  return `<div class="auth-gate">
+    <div class="auth-gate-card">
+      <div class="auth-gate-brand">
+        <div class="brand-mark">${icon("sparkle", 16)}</div>
+        <div>
+          <div class="brand-name">Focusuniv</div>
+          <div class="brand-sub">대학생 집중 워크스페이스</div>
+        </div>
+      </div>
+      <h2>${signup ? "회원가입" : "로그인"}</h2>
+      ${authFormHtml()}
+    </div>
+  </div>`;
+}
+
+function modalHtml() {
+  if (!ui.modal) return "";
+  if (ui.modal === "auth") return "";
   if (ui.modal === "event") {
     const selectedKey = dateKeyFrom(ui.date);
     return `<div class="modal-back" data-act="close-modal"><div class="modal" data-stop="1">
@@ -3339,9 +3371,29 @@ function layout(active, body, desk = false) {
 
 export function render() {
   applyAppearance();
+  const root = document.getElementById("app");
+  if (!root) return;
+  if (!ui.authReady) {
+    root.innerHTML = authLoadingHtml();
+    return;
+  }
+  if (!auth.user()) {
+    ui.modal = null;
+    root.innerHTML = authGateHtml();
+    requestAnimationFrame(() => {
+      const email = document.querySelector(".auth-gate [name='email']");
+      if (email && document.activeElement === document.body) email.focus();
+    });
+    return;
+  }
+  if (ui.onboarding && parseHash().name !== "profile") {
+    if (location.hash !== "#/profile") go("/profile");
+    root.innerHTML = layout("profile", viewProfile());
+    syncKeyboard();
+    return;
+  }
   const route = parseHash();
   const { name, id } = route;
-  const root = document.getElementById("app");
   let html = "";
   if (name === "focus") html = layout("focus", viewFocus(id || "today"), true);
   else if (name === "timeline") html = layout("timeline", viewTimeline());
@@ -4691,6 +4743,7 @@ function onClick(event) {
   if (event.target.closest(".modal") && event.target.closest("[data-stop]")) {
     /* keep */
   } else if (event.target.closest("[data-act='close-modal']")) {
+    if (!auth.user()) return;
     ui.modal = null;
     resetCourseDrafts();
     ui.editingTaskId = null;
@@ -5448,10 +5501,12 @@ function onClick(event) {
     return;
   }
   else if (act === "auth") {
-    if (auth.user()) auth.logout();
-    else {
+    if (auth.user()) {
+      ui.onboarding = false;
+      ui.authNotice = "";
       ui.authMode = "login";
-      ui.modal = "auth";
+      ui.modal = null;
+      auth.logout();
     }
   } else if (act === "auth-mode") {
     ui.authMode = actEl.dataset.mode === "signup" ? "signup" : "login";
@@ -5478,6 +5533,7 @@ function onClick(event) {
     applyCalc(actEl.dataset.key);
   } else if (act === "open-event") ui.modal = "event";
   else if (act === "close-modal") {
+    if (!auth.user()) return;
     ui.modal = null;
     resetCourseDrafts();
     ui.editingTaskId = null;
@@ -5577,6 +5633,12 @@ function onSubmit(event) {
       profilesReady = false;
       ensureRemoteProfiles();
     }
+    if (ui.onboarding) {
+      ui.onboarding = false;
+      go("/today");
+      render();
+      return;
+    }
   } else if (act === "signup") {
     const email = String(data.get("email") || "").trim();
     const password = String(data.get("password") || "");
@@ -5585,19 +5647,25 @@ function onSubmit(event) {
       alert("이메일과 비밀번호를 입력해 주세요.");
       return;
     }
+    ui.onboarding = true;
     auth
       .signup(email, password, name)
       .then((result) => {
-        ui.modal = null;
         if (result?.needsConfirmation) {
-          ui.toast = { title: "회원가입", body: "확인 메일의 링크를 누르면 가입이 완료됩니다." };
+          ui.onboarding = false;
+          ui.authMode = "login";
+          ui.authNotice = "확인 메일의 링크를 누르면 가입이 완료됩니다. 확인 전에는 앱을 사용할 수 없어요.";
           render();
           return;
         }
+        ui.authNotice = "";
+        ui.onboarding = true;
+        if (name) store.updateProfile({ nickname: name });
         go("/profile");
+        render();
       })
       .catch((err) => {
-        ui.modal = "auth";
+        ui.onboarding = false;
         ui.authMode = "signup";
         alert(auth.authErrorMessage(err));
         render();
@@ -5764,11 +5832,13 @@ function onSubmit(event) {
     auth
       .login(data.get("email"), data.get("password"))
       .then(() => {
+        ui.authNotice = "";
+        ui.onboarding = false;
         ui.modal = null;
+        go("/today");
         render();
       })
       .catch((err) => {
-        ui.modal = "auth";
         ui.authMode = "login";
         alert(auth.authErrorMessage(err));
         render();
@@ -6072,13 +6142,15 @@ function syncKeyboard() {
 }
 
 async function boot() {
+  render();
   await auth.initAuth();
+  ui.authReady = true;
   store.setRemoteSaver((payload) => auth.pushRemote(payload).catch(() => {}));
   if (auth.user()) {
     const remote = await auth.pullRemote().catch(() => null);
     if (remote?.payload) store.replaceState(remote.payload);
+    if (!location.hash || location.hash === "#") location.hash = "#/today";
   }
-  if (!location.hash) location.hash = "#/today";
   await registerCustomFont(store.getState().settings?.customFont);
   applyAppearance();
   lastRouteName = parseHash().name;
@@ -6091,7 +6163,12 @@ async function boot() {
     bundleGen += 1;
     profilesReady = false;
     profilesRequest = null;
-    if (auth.user()) maybeSyncTimetable();
+    if (!auth.user()) {
+      ui.onboarding = false;
+      ui.modal = null;
+    } else {
+      maybeSyncTimetable();
+    }
     render();
   });
   document.addEventListener("click", onClick);

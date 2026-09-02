@@ -6,7 +6,7 @@ Student focus workspace for university work: dated todos, one live clock per tas
 
 - Audience: university students planning a day across classes, group work, and personal projects.
 - Mechanism: one task owns the clock; everything else is context around that running measurement.
-- Data: local-first on the device, optional Netlify Identity account sync.
+- Data: Netlify Identity account required. Device storage holds the working copy and syncs to the signed-in account. The app is not usable without signing in.
 - AI: optional coach. On day rollover it turns yesterday's completion and session shape into a notification. Task split is secondary.
 
 ## Voice
