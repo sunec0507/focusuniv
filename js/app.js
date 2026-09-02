@@ -121,6 +121,7 @@ const ui = {
   courseColorDraft: "",
   courseFormDraft: null,
   courseDeleteConfirm: false,
+  eventId: null,
   timetableTab: "grid",
   timetableId: "",
   timetableMenu: false,
@@ -786,54 +787,19 @@ function weekdayLabel(date) {
   return ["일요일", "월요일", "화요일", "수요일", "목요일", "금요일", "토요일"][date instanceof Date ? date.getDay() : new Date().getDay()];
 }
 
-function todayCourseRows(date) {
-  const day = timetableDayFromDate(date);
-  const rows = [];
-  for (const course of store.primaryCourses()) {
-    for (const slot of store.courseSlots(course)) {
-      if (Number(slot.day) !== day) continue;
-      rows.push({
-        course,
-        slot,
-        start: timeToMinutes(slot.startTime),
-        end: timeToMinutes(slot.endTime),
-      });
-    }
-  }
-  rows.sort((a, b) => a.start - b.start || a.end - b.end);
-  return rows;
+function normalizeTimetableDay(value) {
+  if (value == null || value === "") return 0;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  if (n === 0) return 7;
+  if (n >= 1 && n <= 7) return n;
+  return 0;
 }
 
 function viewTodaySchedule() {
   const date = ui.date instanceof Date ? ui.date : new Date();
   const isToday = dateKeyFrom(date) === todayKey();
-  const rows = todayCourseRows(date);
-  const now = new Date();
-  const nowMin = isToday ? now.getHours() * 60 + now.getMinutes() : -1;
-  const currentIdx = rows.findIndex((row) => nowMin >= row.start && nowMin < row.end);
-  const nextIdx = currentIdx < 0 ? rows.findIndex((row) => row.start > nowMin) : -1;
   const title = isToday ? "오늘 시간표" : `${weekdayLabel(date)} 시간표`;
-  const body = rows.length
-    ? `<div class="today-sched-list">
-        ${rows
-          .map((row, i) => {
-            const meta = [row.course.room, row.course.professor].filter(Boolean).join(" · ");
-            const mark = i === currentIdx ? "진행" : i === nextIdx ? "다음" : "";
-            return `<div class="today-sched-row ${i === currentIdx ? "now" : ""} ${i === nextIdx ? "next" : ""}">
-              <span class="today-sched-time">
-                <b>${escapeHtml(row.slot.startTime)}</b>
-                <span>${escapeHtml(row.slot.endTime)}</span>
-              </span>
-              <span class="dot" style="background:${escapeHtml(row.course.color || "#2563eb")}"></span>
-              <div class="today-sched-copy">
-                <div class="task-title">${escapeHtml(row.course.title || "수업")}${mark ? `<span class="due-chip">${mark}</span>` : ""}</div>
-                ${meta ? `<div class="task-meta">${escapeHtml(meta)}</div>` : ""}
-              </div>
-            </div>`;
-          })
-          .join("")}
-      </div>`
-    : `<div class="today-sched-empty">이 요일에 등록된 수업이 없습니다.</div>`;
   return `
     <aside class="today-split-schedule">
       <div class="today-sched-card">
@@ -841,7 +807,11 @@ function viewTodaySchedule() {
           <b>${escapeHtml(title)}</b>
           <a href="#/timetable">시간표 탭에서 관리</a>
         </div>
-        ${body}
+        ${viewTimetableGrid(store.primaryCourses(), {
+          onlyDay: timetableDayFromDate(date),
+          now: isToday,
+          events: store.eventsOn(dateKeyFrom(date)),
+        })}
       </div>
     </aside>`;
 }
@@ -939,6 +909,24 @@ function activeTimetableId() {
   return list.some((item) => item.id === id) ? id : list[0]?.id || "";
 }
 
+const TT_MENU_HINT_KEY = "focus-tt-menu-hint-v1";
+
+function ttMenuHintOpen() {
+  try {
+    return localStorage.getItem(TT_MENU_HINT_KEY) !== "1";
+  } catch {
+    return false;
+  }
+}
+
+function dismissTtMenuHint() {
+  try {
+    localStorage.setItem(TT_MENU_HINT_KEY, "1");
+  } catch {
+    /* ignore */
+  }
+}
+
 function timetableSwitcherHtml() {
   const list = store.getTimetables();
   const active = activeTimetableId();
@@ -946,6 +934,7 @@ function timetableSwitcherHtml() {
   const canDelete = list.length > 1;
   const isPrimary = active === primary;
   const menuOpen = Boolean(ui.timetableMenu);
+  const showHint = canDelete && !menuOpen && ttMenuHintOpen();
   return `
     <div class="tt-switch">
       <span class="tt-switch-label">시간표</span>
@@ -959,10 +948,11 @@ function timetableSwitcherHtml() {
               </button>`,
           )
           .join("")}
-        <button type="button" class="tt-chip-add" data-act="add-timetable" aria-label="시간표 추가">${icon("plus", 14)}</button>
+        <button type="button" class="tt-chip-add" data-act="add-timetable" title="시간표 추가" aria-label="시간표 추가">${icon("plus", 14)}</button>
       </div>
       <div class="tt-switch-more">
-        <button type="button" class="icon-btn ${menuOpen ? "on" : ""}" data-act="tt-menu" aria-label="시간표 편집" aria-expanded="${menuOpen ? "true" : "false"}">${icon("moreVertical", 16)}</button>
+        <button type="button" class="icon-btn ${menuOpen ? "on" : ""}" data-act="tt-menu" title="선택한 시간표 편집: 이름 변경, 대표 설정, 삭제" aria-label="선택한 시간표 편집" aria-expanded="${menuOpen ? "true" : "false"}">${icon("moreVertical", 16)}</button>
+        ${showHint ? `<span class="tt-switch-hint" role="status">이름 변경 · 대표 설정 · 삭제는 여기</span>` : ""}
         ${
           menuOpen
             ? `<div class="tt-switch-pop">
@@ -992,29 +982,155 @@ function viewTimetable() {
     ${tab === "gpa" ? viewGpa() : `${timetableSwitcherHtml()}${viewTimetableGrid(store.coursesIn(activeTimetableId()))}`}`;
 }
 
-function viewTimetableGrid(courses = []) {
-  const { dayCount, dayLabels } = timetableDays(courses);
+function ttHexColor(value, fallback = "#2563eb") {
+  return /^#[0-9A-Fa-f]{6}$/.test(String(value || "")) ? value : fallback;
+}
+
+function ttBlockGeometry(startTime, endTime) {
+  const startBound = TT_START_HOUR * 60;
+  const endBound = TT_END_HOUR * 60;
+  const startRaw = timeToMinutes(startTime);
+  const endRaw = timeToMinutes(endTime);
+  const start = Math.max(startBound, startRaw);
+  const end = Math.min(endBound, endRaw);
+  if (end <= start) return null;
+  const rawH = ((end - start) / 60) * TT_ROW;
+  return {
+    startRaw,
+    endRaw,
+    start,
+    end,
+    top: ((start - startBound) / 60) * TT_ROW + 3,
+    height: Math.max(22, rawH - 6),
+  };
+}
+
+function ttCourseItems(courses, { onlyDay, dayCount }) {
+  const items = [];
+  for (const course of courses) {
+    for (const slot of store.courseSlots(course)) {
+      const day = Number(slot.day) || 1;
+      if (onlyDay) {
+        if (day !== onlyDay) continue;
+      } else if (day < 1 || day > dayCount) {
+        continue;
+      }
+      const geo = ttBlockGeometry(slot.startTime, slot.endTime);
+      if (!geo) continue;
+      items.push({
+        kind: "course",
+        id: course.id,
+        title: course.title || "수업",
+        color: ttHexColor(course.color, "#2563eb"),
+        meta: [course.room, course.professor].filter(Boolean).join(" · "),
+        startLabel: slot.startTime,
+        endLabel: slot.endTime,
+        day,
+        lane: 0,
+        lanes: 1,
+        ...geo,
+      });
+    }
+  }
+  return items;
+}
+
+function ttEventItems(events, day) {
+  return (Array.isArray(events) ? events : [])
+    .map((event) => {
+      const geo = ttBlockGeometry(event.startTime || "09:00", event.endTime || "10:00");
+      if (!geo) return null;
+      const startLabel = event.startTime || "09:00";
+      const endLabel = event.endTime || "10:00";
+      return {
+        kind: "event",
+        id: event.id,
+        title: event.title || "일정",
+        color: ttHexColor(event.color, "#2563eb"),
+        meta: `일정 · ${startLabel}–${endLabel}`,
+        startLabel,
+        endLabel,
+        day,
+        lane: 0,
+        lanes: 1,
+        ...geo,
+      };
+    })
+    .filter(Boolean);
+}
+
+function packTimetableLanes(items) {
+  if (!items.length) return items;
+  const sorted = [...items].sort((a, b) => a.start - b.start || a.end - b.end);
+  const clusters = [];
+  for (const item of sorted) {
+    const last = clusters[clusters.length - 1];
+    if (!last || item.start >= last.end) {
+      clusters.push({ end: item.end, items: [item] });
+    } else {
+      last.items.push(item);
+      last.end = Math.max(last.end, item.end);
+    }
+  }
+  for (const cluster of clusters) {
+    const colEnds = [];
+    for (const item of cluster.items) {
+      let lane = colEnds.findIndex((end) => item.start >= end);
+      if (lane < 0) {
+        lane = colEnds.length;
+        colEnds.push(item.end);
+      } else {
+        colEnds[lane] = item.end;
+      }
+      item.lane = lane;
+    }
+    const lanes = Math.max(1, colEnds.length);
+    for (const item of cluster.items) item.lanes = lanes;
+  }
+  return items;
+}
+
+function viewTimetableGrid(courses = [], opts = {}) {
+  const onlyDay = normalizeTimetableDay(opts.onlyDay);
+  const week = timetableDays(courses);
+  const weekLabels = ["월", "화", "수", "목", "금", "토", "일"];
+  const dayCount = onlyDay ? 1 : week.dayCount;
+  const dayLabels = onlyDay ? [weekLabels[onlyDay - 1]] : week.dayLabels;
   const hours = Array.from({ length: TT_END_HOUR - TT_START_HOUR + 1 }, (_, i) => i + TT_START_HOUR);
   const gridHeight = (TT_END_HOUR - TT_START_HOUR) * TT_ROW;
   const todayDay = timetableDayFromDate(new Date());
   const now = new Date();
   const nowMin = now.getHours() * 60 + now.getMinutes();
-  const showNow = nowMin > TT_START_HOUR * 60 && nowMin < TT_END_HOUR * 60;
+  const showNow = nowMin > TT_START_HOUR * 60 && nowMin < TT_END_HOUR * 60 && (onlyDay ? opts.now === true : true);
   const nowTop = ((nowMin - TT_START_HOUR * 60) / 60) * TT_ROW;
-  const startBound = TT_START_HOUR * 60;
-  const endBound = TT_END_HOUR * 60;
+  const includeEvents = Array.isArray(opts.events);
+  const items = ttCourseItems(courses, { onlyDay, dayCount });
+  if (includeEvents && onlyDay) items.push(...ttEventItems(opts.events, onlyDay));
+  if (includeEvents && onlyDay) packTimetableLanes(items);
+  let nextStart = -1;
+  let nextEnd = -1;
+  if (onlyDay && showNow) {
+    const rows = [...items].sort((a, b) => a.startRaw - b.startRaw || a.endRaw - b.endRaw);
+    const hasLive = rows.some((row) => nowMin >= row.startRaw && nowMin < row.endRaw);
+    const next = hasLive ? null : rows.find((row) => row.startRaw > nowMin);
+    if (next) {
+      nextStart = next.startRaw;
+      nextEnd = next.endRaw;
+    }
+  }
   return `
     <div class="tt-wrap" style="--tt-days:${dayCount};--tt-row:${TT_ROW}px;--tt-gutter:48px">
       <div class="tt-days">
         <div class="tt-day-head gutter" aria-hidden="true"></div>
         ${dayLabels
-          .map(
-            (label, i) =>
-              `<div class="tt-day-head ${i + 1 === todayDay ? "today" : ""}">${label}</div>`,
-          )
+          .map((label, i) => {
+            const day = onlyDay || i + 1;
+            const isTodayCol = onlyDay ? opts.now === true && day === todayDay : day === todayDay;
+            return `<div class="tt-day-head ${isTodayCol ? "today" : ""}">${label}</div>`;
+          })
           .join("")}
       </div>
-      <div class="tt-grid" style="height:${gridHeight}px" aria-label="주간 시간표">
+      <div class="tt-grid" style="height:${gridHeight}px" aria-label="${onlyDay ? "요일 시간표" : "주간 시간표"}">
         ${hours
           .map(
             (hour, i) =>
@@ -1023,35 +1139,34 @@ function viewTimetableGrid(courses = []) {
           .join("")}
         <div class="tt-plot">
           ${dayLabels
-            .map(
-              (_, i) =>
-                `<div class="tt-col${i + 1 === todayDay ? " today" : ""}${i === dayCount - 1 ? " last" : ""}" style="left:${(i / dayCount) * 100}%;width:${(1 / dayCount) * 100}%"></div>`,
-            )
+            .map((_, i) => {
+              const day = onlyDay || i + 1;
+              const isTodayCol = onlyDay ? opts.now === true && day === todayDay : day === todayDay;
+              return `<div class="tt-col${isTodayCol ? " today" : ""}${i === dayCount - 1 ? " last" : ""}" style="left:${(i / dayCount) * 100}%;width:${(1 / dayCount) * 100}%"></div>`;
+            })
             .join("")}
-          ${courses
-            .flatMap((course) =>
-              store.courseSlots(course).map((slot) => {
-                const day = Number(slot.day) || 1;
-                if (day < 1 || day > dayCount) return "";
-                const start = Math.max(startBound, timeToMinutes(slot.startTime));
-                const end = Math.min(endBound, timeToMinutes(slot.endTime));
-                if (end <= start) return "";
-                const rawH = ((end - start) / 60) * TT_ROW;
-                const height = Math.max(22, rawH - 6);
-                const top = ((start - startBound) / 60) * TT_ROW + 3;
-                const left = ((day - 1) / dayCount) * 100;
-                const width = (1 / dayCount) * 100;
-                const color = /^#[0-9A-Fa-f]{6}$/.test(String(course.color || "")) ? course.color : "#2563eb";
-                const meta = [course.room, course.professor].filter(Boolean).join(" · ");
-                const short = height < 40 ? " short" : "";
-                return `<button type="button" class="tt-block${short}" data-act="edit-course" data-id="${course.id}"
-                  style="top:${top}px;height:${height}px;left:calc(${left}% + 5px);width:calc(${width}% - 10px);--tt-color:${color}"
-                  title="${escapeHtml([course.title, slot.startTime, slot.endTime, meta].filter(Boolean).join(" · "))}">
-                  <span class="tt-name">${escapeHtml(course.title || "수업")}</span>
-                  ${meta ? `<span class="tt-room">${escapeHtml(meta)}</span>` : ""}
-                </button>`;
-              }),
-            )
+          ${items
+            .map((item) => {
+              const col = onlyDay ? 0 : item.day - 1;
+              const colShare = 100 / dayCount;
+              const laneShare = colShare / item.lanes;
+              const left = col * colShare + item.lane * laneShare;
+              const width = laneShare;
+              const pad = item.lanes > 1 ? 3 : 5;
+              const short = item.height < 40 ? " short" : "";
+              const live = onlyDay && showNow && nowMin >= item.startRaw && nowMin < item.endRaw;
+              const next = onlyDay && showNow && nextStart >= 0 && item.startRaw === nextStart && item.endRaw === nextEnd;
+              const mark = live ? "진행" : next ? "다음" : "";
+              const isEvent = item.kind === "event";
+              const act = isEvent ? "show-event" : "edit-course";
+              const label = isEvent ? `${icon("calendar", 11)}` : "";
+              return `<button type="button" class="tt-block${short}${live ? " now" : ""}${next ? " next" : ""}${isEvent ? " event" : ""}" data-act="${act}" data-id="${item.id}"
+                style="top:${item.top}px;height:${item.height}px;left:calc(${left}% + ${pad}px);width:calc(${width}% - ${pad * 2}px);--tt-color:${item.color}"
+                title="${escapeHtml([item.title, item.startLabel, item.endLabel, item.meta].filter(Boolean).join(" · "))}">
+                <span class="tt-name">${label}${escapeHtml(item.title)}${mark ? `<span class="due-chip">${mark}</span>` : ""}</span>
+                ${item.meta ? `<span class="tt-room">${escapeHtml(item.meta)}</span>` : ""}
+              </button>`;
+            })
             .join("")}
           ${showNow ? `<div class="tt-now" style="top:${nowTop}px" aria-hidden="true"></div>` : ""}
         </div>
@@ -2998,6 +3113,18 @@ function modalHtml() {
       </form>
     </div></div>`;
   }
+  if (ui.modal === "event-detail") {
+    const event = (store.getState().events || []).find((item) => item.id === ui.eventId);
+    if (!event) return "";
+    return `<div class="modal-back" data-act="close-modal"><div class="modal" data-stop="1">
+      <h2>${escapeHtml(event.title || "일정")}</h2>
+      <p class="modal-meta">${escapeHtml(event.date || "")} · ${escapeHtml(event.startTime || "")}–${escapeHtml(event.endTime || "")}</p>
+      <div class="stack">
+        <button class="danger" type="button" data-act="del-event" data-id="${event.id}">삭제</button>
+        <button class="ghost" type="button" data-act="close-modal">닫기</button>
+      </div>
+    </div></div>`;
+  }
   if (ui.modal === "task-edit") {
     const task = store.getState().tasks.find((item) => item.id === ui.editingTaskId);
     if (!task) return "";
@@ -4514,6 +4641,7 @@ function onClick(event) {
     ui.modal = null;
     resetCourseDrafts();
     ui.editingTaskId = null;
+    ui.eventId = null;
     ui.pollGroupId = null;
     ui.newPageParent = "";
     ui.newPageGroupId = "";
@@ -4630,8 +4758,16 @@ function onClick(event) {
   } else if (act === "pick-day") {
     const [y, m, d] = actEl.dataset.key.split("-").map(Number);
     ui.date = new Date(y, m - 1, d);
-  } else if (act === "del-event") store.deleteEvent(id);
-  else if (act === "open-course") {
+  } else if (act === "del-event") {
+    store.deleteEvent(id);
+    if (ui.modal === "event-detail") {
+      ui.modal = null;
+      ui.eventId = null;
+    }
+  } else if (act === "show-event") {
+    ui.eventId = id;
+    ui.modal = "event-detail";
+  } else if (act === "open-course") {
     ui.courseId = null;
     ui.courseSlotsDraft = [defaultCourseSlot()];
     ui.courseColorDraft = store.getState().categories[0]?.color || "#0EA5E9";
@@ -4688,17 +4824,24 @@ function onClick(event) {
     ui.timetableMenu = false;
   } else if (act === "tt-menu") {
     ui.timetableMenu = !ui.timetableMenu;
+    if (ui.timetableMenu) dismissTtMenuHint();
   } else if (act === "add-timetable") {
     ui.timetableMenu = false;
     const name = prompt("시간표 이름", "새 시간표");
-    if (name === null) return;
+    if (name === null) {
+      render();
+      return;
+    }
     const tt = store.addTimetable(name);
     ui.timetableId = tt.id;
   } else if (act === "rename-timetable") {
     ui.timetableMenu = false;
     const current = store.getTimetables().find((item) => item.id === id);
     const name = prompt("시간표 이름", current?.name || "");
-    if (name === null) return;
+    if (name === null) {
+      render();
+      return;
+    }
     store.renameTimetable(id, name);
   } else if (act === "set-primary-timetable") {
     ui.timetableMenu = false;
@@ -4709,10 +4852,14 @@ function onClick(event) {
     const list = store.getTimetables();
     if (list.length <= 1) {
       alert("마지막 시간표는 삭제할 수 없습니다.");
+      render();
       return;
     }
     const current = list.find((item) => item.id === id);
-    if (!confirm(`"${current?.name || "시간표"}"를 삭제할까요? 안의 수업도 함께 삭제됩니다.`)) return;
+    if (!confirm(`"${current?.name || "시간표"}"를 삭제할까요? 안의 수업도 함께 삭제됩니다.`)) {
+      render();
+      return;
+    }
     const wasPrimary = id === store.getState().primaryTimetableId;
     if (!store.deleteTimetable(id)) return;
     const next = store.getTimetables();
@@ -5248,6 +5395,7 @@ function onClick(event) {
     ui.modal = null;
     resetCourseDrafts();
     ui.editingTaskId = null;
+    ui.eventId = null;
     ui.pollGroupId = null;
     ui.newPageParent = "";
     ui.newPageGroupId = "";

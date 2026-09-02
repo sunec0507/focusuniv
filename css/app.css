@@ -562,6 +562,13 @@ input, textarea { caret-color: var(--accent); }
   font-weight: 650;
 }
 .today-sched-head a:hover { color: var(--accent); }
+.today-sched-card .tt-wrap {
+  border: 0;
+  border-radius: 0;
+  border-top: 1px solid var(--line);
+}
+.today-sched-card .tt-days,
+.today-sched-card .tt-grid { min-width: 0; }
 .today-sched-list {
   border-top: 1px solid var(--line);
 }
@@ -925,13 +932,32 @@ textarea.field { min-height: 88px; resize: vertical; }
 .tt-switch-more .icon-btn {
   width: 32px;
   height: 32px;
-  background: transparent;
-  border-color: transparent;
+  color: var(--ink);
+  background: var(--paper);
+  border: 0.5px solid var(--line);
 }
 .tt-switch-more .icon-btn.on {
   color: var(--accent);
   background: var(--paper);
-  border-color: var(--line);
+  border-color: var(--accent);
+}
+.tt-switch-hint {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 31;
+  max-width: 220px;
+  padding: 8px 10px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.35;
+  letter-spacing: -0.02em;
+  pointer-events: none;
 }
 .tt-switch-pop {
   position: absolute;
@@ -1082,6 +1108,10 @@ textarea.field { min-height: 88px; resize: vertical; }
 .tt-block:hover {
   background: color-mix(in srgb, var(--tt-color, var(--accent)) 20%, var(--paper));
 }
+.tt-block.now {
+  background: color-mix(in srgb, var(--tt-color, var(--accent)) 22%, var(--paper));
+}
+.tt-name .due-chip { margin-left: 4px; }
 .tt-block:focus-visible {
   outline-offset: 1px;
 }
@@ -1107,6 +1137,17 @@ textarea.field { min-height: 88px; resize: vertical; }
 }
 .tt-block.short .tt-room { display: none; }
 .tt-block.short { padding-top: 5px; padding-bottom: 5px; }
+.tt-block.event {
+  border-style: dashed;
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--tt-color, var(--accent)) 70%, var(--ink));
+}
+.tt-block.event .tt-name .icon {
+  display: inline-block;
+  vertical-align: -2px;
+  margin-right: 4px;
+  color: var(--muted);
+}
+.tt-block.event .tt-room { font-variant-numeric: tabular-nums; }
 
 .gpa-tabs {
   display: flex;
@@ -2886,6 +2927,12 @@ button.folder-crumb:hover { background: rgba(17, 24, 39, 0.05); color: var(--ink
   box-shadow: var(--shadow);
 }
 .modal h2 { margin: 0 0 14px; font-size: 20px; letter-spacing: -0.03em; }
+.modal-meta {
+  margin: -6px 0 16px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 550;
+}
 .stack { display: grid; gap: 10px; }
 .auth-modes { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 

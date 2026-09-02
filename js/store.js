@@ -832,6 +832,11 @@ export function deleteEvent(id) {
   emit();
 }
 
+export function eventsOn(dateKey) {
+  const key = String(dateKey || "");
+  return (state.events || []).filter((event) => event.date === key);
+}
+
 export function addCourse(input, timetableId) {
   const course = {
     id: uid("course"),
