@@ -2492,6 +2492,7 @@ button.folder-crumb:hover { background: rgba(17, 24, 39, 0.05); color: var(--ink
 }
 .modal h2 { margin: 0 0 14px; font-size: 20px; letter-spacing: -0.03em; }
 .stack { display: grid; gap: 10px; }
+.auth-modes { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 
 .toast-stack {
   position: fixed;

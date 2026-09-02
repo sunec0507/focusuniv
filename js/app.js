@@ -76,6 +76,7 @@ const ui = {
   slash: null,
   panel: false,
   modal: null,
+  authMode: "login",
   toast: null,
   auxMinutes: "30",
   report: null,
@@ -2820,15 +2821,18 @@ function viewFocus(section) {
 function modalHtml() {
   if (!ui.modal) return "";
   if (ui.modal === "auth") {
+    const signup = ui.authMode === "signup";
     return `<div class="modal-back" data-act="close-modal"><div class="modal" data-stop="1">
-      <h2>계정</h2>
-      <form class="stack" data-act="login">
-        <input class="field" name="email" type="email" placeholder="이메일" required>
-        <input class="field" name="password" type="password" placeholder="비밀번호" required>
-        <input class="field" name="name" placeholder="이름 (가입 시)">
-        <button class="primary" type="submit">로그인</button>
-        <button class="ghost" type="button" data-act="signup">회원가입</button>
-        <p class="page-date">Identity는 Netlify 배포 후에 동작합니다. 로컬에서는 기기 저장만 사용합니다.</p>
+      <h2>${signup ? "회원가입" : "로그인"}</h2>
+      <div class="auth-modes">
+        <button class="ghost ${signup ? "" : "on"}" type="button" data-act="auth-mode" data-mode="login">로그인</button>
+        <button class="ghost ${signup ? "on" : ""}" type="button" data-act="auth-mode" data-mode="signup">회원가입</button>
+      </div>
+      <form class="stack" data-act="${signup ? "signup" : "login"}">
+        <input class="field" name="email" type="email" placeholder="이메일" required autocomplete="email">
+        <input class="field" name="password" type="password" placeholder="${signup ? "비밀번호 (6자 이상)" : "비밀번호"}" required minlength="6" autocomplete="${signup ? "new-password" : "current-password"}">
+        ${signup ? `<input class="field" name="name" placeholder="이름" required autocomplete="name">` : ""}
+        <button class="primary" type="submit">${signup ? "가입하기" : "로그인"}</button>
       </form>
     </div></div>`;
   }
@@ -4557,21 +4561,12 @@ function onClick(event) {
   }
   else if (act === "auth") {
     if (auth.user()) auth.logout();
-    else ui.modal = "auth";
-  } else if (act === "signup") {
-    const form = actEl.closest("form");
-    const email = form.email.value;
-    const password = form.password.value;
-    const name = form.name.value;
-    ui.modal = null;
-    auth
-      .signup(email, password, name)
-      .then(() => go("/profile"))
-      .catch((err) => {
-        ui.modal = "auth";
-        alert(err.message);
-        render();
-      });
+    else {
+      ui.authMode = "login";
+      ui.modal = "auth";
+    }
+  } else if (act === "auth-mode") {
+    ui.authMode = actEl.dataset.mode === "signup" ? "signup" : "login";
   } else if (act === "leave-desk") {
     store.autoFinishActiveTimer();
     go("/today");
@@ -4688,16 +4683,28 @@ function onSubmit(event) {
       ensureRemoteProfiles();
     }
   } else if (act === "signup") {
-    const email = data.get("email");
-    const password = data.get("password");
-    const name = data.get("name");
-    ui.modal = null;
+    const email = String(data.get("email") || "").trim();
+    const password = String(data.get("password") || "");
+    const name = String(data.get("name") || "").trim();
+    if (!email || !password) {
+      alert("이메일과 비밀번호를 입력해 주세요.");
+      return;
+    }
     auth
       .signup(email, password, name)
-      .then(() => go("/profile"))
+      .then((result) => {
+        ui.modal = null;
+        if (result?.needsConfirmation) {
+          ui.toast = { title: "회원가입", body: "확인 메일의 링크를 누르면 가입이 완료됩니다." };
+          render();
+          return;
+        }
+        go("/profile");
+      })
       .catch((err) => {
         ui.modal = "auth";
-        alert(err.message);
+        ui.authMode = "signup";
+        alert(auth.authErrorMessage(err));
         render();
       });
     return;
@@ -4839,8 +4846,19 @@ function onSubmit(event) {
     }
     send("");
   } else if (act === "login") {
-    auth.login(data.get("email"), data.get("password")).catch((err) => alert(err.message));
-    ui.modal = null;
+    auth
+      .login(data.get("email"), data.get("password"))
+      .then(() => {
+        ui.modal = null;
+        render();
+      })
+      .catch((err) => {
+        ui.modal = "auth";
+        ui.authMode = "login";
+        alert(auth.authErrorMessage(err));
+        render();
+      });
+    return;
   }
   render();
 }

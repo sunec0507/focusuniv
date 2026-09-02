@@ -1,11 +1,59 @@
-const identityUrl = "https://esm.sh/@netlify/identity@0.3.0";
+import {
+  getUser,
+  handleAuthCallback,
+  login as identityLogin,
+  logout as identityLogout,
+  onAuthChange,
+  signup as identitySignup,
+  updateUser,
+} from "/js/vendor/netlify-identity.js";
 
-let identity = null;
 let currentUser = null;
+let identityReady = false;
 const listeners = new Set();
 
 function emit() {
   listeners.forEach((fn) => fn(currentUser));
+}
+
+function jwtFromCookie() {
+  const match = document.cookie.match(/(?:^|; )nf_jwt=([^;]*)/);
+  if (!match) return "";
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return match[1];
+  }
+}
+
+function isAuthCallbackHash(hash) {
+  const raw = String(hash || "").replace(/^#/, "");
+  if (!raw || raw.startsWith("/")) return false;
+  return /(?:^|&)(access_token|confirmation_token|recovery_token|invite_token|email_change_token)=/.test(raw);
+}
+
+export function authErrorMessage(err) {
+  const status = err?.status;
+  const msg = String(err?.message || err || "");
+  if (status === 401 || /invalid.*(email|password)|invalid_grant/i.test(msg)) {
+    return "이메일 또는 비밀번호가 올바르지 않습니다.";
+  }
+  if (status === 403 || /not allowed|disabled|signups are not allowed/i.test(msg)) {
+    return "지금은 회원가입이 허용되지 않습니다.";
+  }
+  if (status === 422 || /already|registered|exists|taken/i.test(msg)) {
+    return "이미 가입된 이메일이거나 비밀번호가 조건에 맞지 않습니다. 비밀번호는 6자 이상으로 입력해 주세요.";
+  }
+  if (/A user with this email address has already been registered/i.test(msg)) {
+    return "이미 가입된 이메일입니다. 로그인하거나 다른 이메일을 사용해 주세요.";
+  }
+  if (/Password should be at least/i.test(msg)) {
+    return "비밀번호는 6자 이상으로 입력해 주세요.";
+  }
+  if (/계정 기능은/.test(msg) || /MissingIdentity|not available/i.test(msg)) {
+    return "계정 기능을 아직 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.";
+  }
+  return msg || "계정 요청을 처리하지 못했습니다.";
 }
 
 export function onAuth(fn) {
@@ -19,43 +67,73 @@ export function user() {
 
 export async function initAuth() {
   try {
-    identity = await import(identityUrl);
-    await identity.handleAuthCallback?.();
-    currentUser = (await identity.getUser()) ?? null;
-    identity.onAuthChange?.((next) => {
+    if (isAuthCallbackHash(location.hash)) {
+      try {
+        await handleAuthCallback();
+      } catch (err) {
+        console.error("[auth] 인증 콜백 처리 실패:", err);
+      }
+    }
+    currentUser = (await getUser()) ?? null;
+    onAuthChange((_event, next) => {
       currentUser = next ?? null;
       emit();
     });
+    identityReady = true;
     emit();
-  } catch {
-    identity = null;
+  } catch (err) {
+    console.error("[auth] Netlify Identity 초기화 실패:", err);
+    identityReady = false;
     currentUser = null;
   }
   return currentUser;
 }
 
+function requireIdentity() {
+  if (!identityReady) {
+    throw new Error("계정 기능을 아직 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.");
+  }
+}
+
 export async function signup(email, password, name) {
-  if (!identity) throw new Error("계정 기능은 Netlify에 배포된 뒤에 사용할 수 있습니다.");
-  currentUser = await identity.signup(email, password, { full_name: name });
-  emit();
-  return currentUser;
+  requireIdentity();
+  const emailValue = String(email || "").trim();
+  await identitySignup(emailValue, password, {
+    full_name: String(name || "").trim(),
+  });
+  try {
+    currentUser = await identityLogin(emailValue, password);
+    emit();
+    return { user: currentUser, needsConfirmation: false };
+  } catch (err) {
+    currentUser = null;
+    emit();
+    if (err?.status === 401 || /not confirmed|email not confirmed/i.test(String(err?.message || ""))) {
+      return { user: null, needsConfirmation: true };
+    }
+    throw err;
+  }
 }
 
 export async function login(email, password) {
-  if (!identity) throw new Error("계정 기능은 Netlify에 배포된 뒤에 사용할 수 있습니다.");
-  currentUser = await identity.login(email, password);
+  requireIdentity();
+  currentUser = await identityLogin(String(email || "").trim(), password);
   emit();
   return currentUser;
 }
 
 export async function logout() {
-  if (identity) await identity.logout();
+  try {
+    await identityLogout();
+  } catch (err) {
+    console.error("[auth] 로그아웃 실패:", err);
+  }
   currentUser = null;
   emit();
 }
 
 export async function authHeader() {
-  const token = await identity?.getToken?.();
+  const token = jwtFromCookie();
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
@@ -123,23 +201,17 @@ export async function findAvailability(members, range = {}) {
 }
 
 export async function changePassword(newPassword) {
-  if (!identity) throw new Error("계정 기능은 Netlify에 배포된 뒤에 사용할 수 있습니다.");
+  requireIdentity();
   if (!currentUser) throw new Error("로그인이 필요합니다.");
-  if (typeof identity.updateUser !== "function") {
-    throw new Error("비밀번호 변경을 지원하지 않는 환경입니다.");
-  }
-  currentUser = await identity.updateUser({ password: newPassword });
+  currentUser = await updateUser({ password: newPassword });
   emit();
   return currentUser;
 }
 
 export async function changeEmail(newEmail) {
-  if (!identity) throw new Error("계정 기능은 Netlify에 배포된 뒤에 사용할 수 있습니다.");
+  requireIdentity();
   if (!currentUser) throw new Error("로그인이 필요합니다.");
-  if (typeof identity.updateUser !== "function") {
-    throw new Error("이메일 변경을 지원하지 않는 환경입니다.");
-  }
-  currentUser = await identity.updateUser({ email: newEmail });
+  currentUser = await updateUser({ email: newEmail });
   emit();
   return currentUser;
 }
