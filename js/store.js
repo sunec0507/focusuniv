@@ -537,6 +537,8 @@ function seed(now = new Date()) {
     auxiliaryTimer: null,
     notifications: [],
     seenAssignedTaskIds: [],
+    seenGroupTaskIds: [],
+    lastSeenChangelogVersion: "",
     meta: {
       lastVisitDate: today,
       focusSection: "timer",
@@ -572,6 +574,10 @@ function stateFromRaw(raw) {
     seenAssignedTaskIds: Array.isArray(parsed.seenAssignedTaskIds)
       ? parsed.seenAssignedTaskIds.filter(Boolean).slice(-200)
       : base.seenAssignedTaskIds,
+    seenGroupTaskIds: Array.isArray(parsed.seenGroupTaskIds)
+      ? parsed.seenGroupTaskIds.filter(Boolean).slice(-200)
+      : base.seenGroupTaskIds,
+    lastSeenChangelogVersion: String(parsed.lastSeenChangelogVersion || ""),
     meta: { ...base.meta, ...parsed.meta },
   };
 }
@@ -695,6 +701,7 @@ export function exportBackupPayload() {
     auxiliaryTimer: _aux,
     currentMemberId: _member,
     seenAssignedTaskIds: _seen,
+    seenGroupTaskIds: _seenGroup,
     ...rest
   } = omitRetiredFields(state);
   const settings = { ...(rest.settings || {}) };
@@ -788,6 +795,12 @@ export function replaceState(next) {
     seenAssignedTaskIds: Array.isArray(incoming.seenAssignedTaskIds)
       ? incoming.seenAssignedTaskIds.filter(Boolean).slice(-200)
       : state.seenAssignedTaskIds || [],
+    seenGroupTaskIds: Array.isArray(incoming.seenGroupTaskIds)
+      ? incoming.seenGroupTaskIds.filter(Boolean).slice(-200)
+      : state.seenGroupTaskIds || [],
+    lastSeenChangelogVersion: String(
+      incoming.lastSeenChangelogVersion ?? state.lastSeenChangelogVersion ?? "",
+    ),
     currentMemberId: activeUserId || incoming.currentMemberId || state.currentMemberId,
   };
   const extras = collectRecurringClones(state.tasks, formatDateKey(new Date()));
@@ -835,6 +848,34 @@ export function upcomingDeadlines(days = 7) {
 
 export function tasksInGroup(groupId) {
   return state.tasks.filter((task) => task.groupId === groupId);
+}
+
+function taskFromRemoteGroup(input) {
+  const task = {
+    id: String(input.id),
+    title: String(input.title || "").trim(),
+    note: String(input.note || "").trim(),
+    categoryId: "work",
+    groupId: String(input.groupId),
+    assigneeName: String(input.assigneeName || "").trim(),
+    createdBy: String(input.createdBy || "").trim(),
+    createdByName: String(input.createdByName || "").trim(),
+    scheduledDate: isDateKey(input.dueDate) ? input.dueDate : formatDateKey(new Date()),
+    status: input.status === "completed" ? "completed" : "todo",
+    focusedSeconds: 0,
+    priority: normalizePriority(input.priority),
+    repeat: null,
+    subtasks: [],
+  };
+  if (isDateKey(input.dueDate)) task.dueDate = input.dueDate;
+  return task;
+}
+
+export function applyRemoteGroupTasks(list) {
+  const incoming = (Array.isArray(list) ? list : []).filter((item) => item?.id && item.groupId);
+  const personal = state.tasks.filter((task) => !task.groupId);
+  state = { ...state, tasks: [...personal, ...incoming.map(taskFromRemoteGroup)] };
+  emit();
 }
 
 export function projectsInGroup(groupId) {
@@ -1076,9 +1117,28 @@ export function takeNewAssignedTaskIds(ids) {
   return fresh;
 }
 
+export function takeNewGroupTaskIds(ids) {
+  const incoming = [...new Set((ids || []).filter(Boolean))];
+  if (!state.meta?.groupTaskAlertsSeeded) {
+    state = {
+      ...state,
+      seenGroupTaskIds: incoming.slice(-200),
+      meta: { ...state.meta, groupTaskAlertsSeeded: true },
+    };
+    emit();
+    return [];
+  }
+  const seen = new Set(state.seenGroupTaskIds || []);
+  const fresh = incoming.filter((id) => !seen.has(id));
+  if (!fresh.length) return [];
+  state = { ...state, seenGroupTaskIds: [...seen, ...fresh].slice(-200) };
+  emit();
+  return fresh;
+}
+
 export function pushNotification(input = {}) {
   const type = String(input.type || "info");
-  if ((type === "group-join" || type === "task-assign") && state.settings?.notifications?.groupUpdates === false) {
+  if ((type === "group-join" || type === "task-assign" || type === "task-add") && state.settings?.notifications?.groupUpdates === false) {
     return null;
   }
   const note = {
@@ -1094,6 +1154,19 @@ export function pushNotification(input = {}) {
   };
   if (notificationDuplicate(note)) return null;
   state = { ...state, notifications: [note, ...state.notifications].slice(0, 40) };
+  emit();
+  return note;
+}
+
+export function checkChangelog(latestVersion, notes) {
+  const version = String(latestVersion || "").trim();
+  if (!version || state.lastSeenChangelogVersion === version) return null;
+  const note = pushNotification({
+    type: "update",
+    title: "앱이 업데이트됐어요",
+    body: String(notes || "").trim(),
+  });
+  state = { ...state, lastSeenChangelogVersion: version };
   emit();
   return note;
 }

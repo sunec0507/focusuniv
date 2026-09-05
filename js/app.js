@@ -395,6 +395,7 @@ function assigneeChoices(group) {
   }
   if (!names.length) add(self);
   else add(self);
+  if ((group.memberIds || []).length >= 2) names.unshift("전체");
   return names;
 }
 
@@ -462,6 +463,7 @@ function maybeRefreshGroupBundle() {
 function applyGroupBundle(data) {
   remoteProfiles = Array.isArray(data?.profiles) ? data.profiles : [];
   applyIncomingPolls(data?.polls);
+  store.applyRemoteGroupTasks(data?.tasks);
   const uid = auth.user()?.id;
   const incoming = Array.isArray(data?.groups) ? data.groups : [];
   store.setGroups(uid ? incoming.filter((group) => (group.memberIds || []).includes(uid)) : []);
@@ -547,6 +549,28 @@ function noteAssignedTasksToMe() {
   }
 }
 
+function noteNewGroupTasks() {
+  const uid = auth.user()?.id;
+  const tasks = (store.getState().tasks || []).filter((task) => task.groupId);
+  const fresh = new Set(store.takeNewGroupTaskIds(tasks.map((task) => task.id)));
+  if (!fresh.size) return;
+  const groups = store.getState().groups || [];
+  for (const task of tasks) {
+    if (!fresh.has(task.id)) continue;
+    if (!task.createdBy || task.createdBy === uid) continue;
+    const group = groups.find((item) => item.id === task.groupId);
+    const author = task.createdByName || memberLabel(task.createdBy);
+    const assignee = task.assigneeName || "미정";
+    store.pushNotification({
+      type: "task-add",
+      title: "새 할 일이 추가됐어요",
+      body: `${author} 님이 ${group?.name || "그룹"}에 "${task.title}" (담당: ${assignee})을 추가했습니다`,
+      groupId: task.groupId,
+      taskId: task.id,
+    });
+  }
+}
+
 function maybeNotifyPollDeadlines() {
   const today = todayKey();
   const limit = formatDateKey(addDays(new Date(), 1));
@@ -570,6 +594,7 @@ function maybeNotifyPollDeadlines() {
 function syncGroupActivityAlerts() {
   syncGroupJoinAlerts(store.getState().groups);
   noteAssignedTasksToMe();
+  noteNewGroupTasks();
   maybeNotifyPollDeadlines();
 }
 
@@ -5511,7 +5536,15 @@ function onClick(event) {
   if (ui.pollMenu && act !== "poll-menu" && !event.target.closest(".poll-card-more")) {
     ui.pollMenu = null;
   }
-  if (act === "toggle-task") store.toggleTask(id);
+  if (act === "toggle-task") {
+    store.toggleTask(id);
+    const task = store.getState().tasks.find((item) => item.id === id);
+    if (task?.groupId) {
+      auth.updateGroupTask(task.id, { status: task.status }).catch(() => {
+        alert("할 일 저장에 실패했어요. 다시 시도해 주세요.");
+      });
+    }
+  }
   else if (act === "task-menu") {
     ui.openTaskMenu = ui.openTaskMenu === id ? null : id;
   } else if (act === "edit-task") {
@@ -5524,7 +5557,13 @@ function onClick(event) {
       render();
       return;
     }
+    const task = store.getState().tasks.find((item) => item.id === id);
     store.deleteTask(id);
+    if (task?.groupId) {
+      auth.deleteGroupTask(task.id).catch(() => {
+        alert("할 일 저장에 실패했어요. 다시 시도해 주세요.");
+      });
+    }
   } else if (act === "toggle-subtask") {
     store.toggleSubtask(id, actEl.dataset.sub);
   } else if (act === "del-subtask") {
@@ -6421,18 +6460,51 @@ function onSubmit(event) {
           ? { freq, until: String(data.get("repeatUntil") || "").trim() || null, seriesId: task.repeat?.seriesId }
           : null;
       store.updateTask(task.id, changes);
+      if (task.groupId) {
+        auth.updateGroupTask(task.id, changes).catch(() => {
+          alert("할 일 저장에 실패했어요. 다시 시도해 주세요.");
+        });
+      }
     }
     ui.modal = null;
     ui.editingTaskId = null;
   } else if (act === "add-group-task") {
-    store.addTask({
-      title: data.get("title"),
-      assigneeName: data.get("assigneeName") || "",
-      scheduledDate: todayKey(),
-      dueDate: data.get("dueDate") || todayKey(),
-      categoryId: "work",
-      groupId: data.get("groupId"),
-    });
+    const groupId = data.get("groupId");
+    const title = data.get("title");
+    const dueDate = data.get("dueDate") || todayKey();
+    const picked = String(data.get("assigneeName") || "");
+    const group = (store.getState().groups || []).find((item) => item.id === groupId);
+    const assignees =
+      picked === "전체"
+        ? (group?.memberIds || []).map((id) => memberLabel(id))
+        : [picked];
+    for (const assigneeName of assignees) {
+      store.addTask({
+        title,
+        assigneeName,
+        scheduledDate: todayKey(),
+        dueDate,
+        categoryId: "work",
+        groupId,
+      });
+    }
+    if (picked === "전체") {
+      ui.toast = { title: "할 일", body: `${assignees.length}명 모두에게 할 일을 추가했어요` };
+    }
+    Promise.all(
+      assignees.map((assigneeName) =>
+        auth.addGroupTask({
+          groupId,
+          title,
+          assigneeName,
+          dueDate,
+        }),
+      ),
+    )
+      .then(() => refreshGroupBundle())
+      .catch(() => {
+        alert("할 일 저장에 실패했어요. 다시 시도해 주세요.");
+      });
   } else if (act === "change-password") {
     const password = String(data.get("password") || "");
     const confirm = String(data.get("confirm") || "");
@@ -7046,6 +7118,14 @@ async function boot() {
     if (!location.hash || location.hash === "#") location.hash = "#/today";
   } else {
     store.bindAccount(null);
+  }
+  try {
+    const response = await fetch("/changelog.json");
+    const entries = response.ok ? await response.json() : [];
+    const latest = Array.isArray(entries) ? entries[0] : null;
+    if (latest?.version) store.checkChangelog(latest.version, latest.notes);
+  } catch {
+    /* changelog is optional */
   }
   await registerCustomFont(store.getState().settings?.customFont);
   store.materializeRecurringTasks(todayKey());

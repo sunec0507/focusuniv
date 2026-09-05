@@ -1,7 +1,7 @@
 import type { Config, Context } from "@netlify/functions";
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "../../db/index.ts";
-import { groups, meetingPolls, pollResponses, profiles } from "../../db/schema.ts";
+import { groupTasks, groups, meetingPolls, pollResponses, profiles } from "../../db/schema.ts";
 import { json, requireUser } from "./_shared/auth.ts";
 
 const MAX_MEMBERS = 8;
@@ -69,7 +69,8 @@ export default async (req: Request, _context: Context) => {
       ...poll,
       responses: responses.filter((item) => item.pollId === poll.id),
     }));
-    return json({ groups: mine, profiles: memberProfiles, polls: pollsWithResponses });
+    const tasks = groupIds.length ? await db.select().from(groupTasks).where(inArray(groupTasks.groupId, groupIds)) : [];
+    return json({ groups: mine, profiles: memberProfiles, polls: pollsWithResponses, tasks });
   }
 
   if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
@@ -221,6 +222,77 @@ export default async (req: Request, _context: Context) => {
     const row = { id: `presp-${Date.now()}`, pollId, userId: user.id, slots };
     await db.insert(pollResponses).values(row);
     return json({ response: row });
+  }
+
+  if (body.action === "add-task") {
+    const groupId = String(body.groupId || "");
+    const title = String(body.title || "").trim();
+    if (!title) return json({ error: "title-required" }, 400);
+    const [group] = await db.select().from(groups).where(eq(groups.id, groupId)).limit(1);
+    if (!group || !isMember(group, user.id)) return json({ error: "forbidden" }, 403);
+    const [profile] = await db.select().from(profiles).where(eq(profiles.userId, user.id)).limit(1);
+    const createdByName = profile?.nickname || String(user.email || "").split("@")[0] || "member";
+    const task = {
+      id: `gtask-${Date.now()}`,
+      groupId,
+      title,
+      note: String(body.note || "").trim() || null,
+      assigneeName: String(body.assigneeName || "").trim(),
+      dueDate: DATE_RE.test(String(body.dueDate || "")) ? String(body.dueDate) : "",
+      status: "todo",
+      priority: body.priority === "high" || body.priority === "low" ? String(body.priority) : "normal",
+      createdBy: user.id,
+      createdByName,
+    };
+    await db.insert(groupTasks).values(task);
+    return json({ task });
+  }
+
+  if (body.action === "update-task") {
+    const taskId = String(body.taskId || body.id || "");
+    if (!taskId) return json({ error: "missing" }, 400);
+    const [task] = await db.select().from(groupTasks).where(eq(groupTasks.id, taskId)).limit(1);
+    if (!task) return json({ error: "missing" }, 404);
+    const [group] = await db.select().from(groups).where(eq(groups.id, task.groupId)).limit(1);
+    if (!group || !isMember(group, user.id)) return json({ error: "forbidden" }, 403);
+    const patch: {
+      title?: string;
+      assigneeName?: string;
+      dueDate?: string;
+      status?: string;
+      priority?: string;
+      updatedAt: Date;
+    } = { updatedAt: new Date() };
+    if ("title" in body) {
+      const title = String(body.title || "").trim();
+      if (!title) return json({ error: "title-required" }, 400);
+      patch.title = title;
+    }
+    if ("assigneeName" in body) patch.assigneeName = String(body.assigneeName || "").trim();
+    if ("dueDate" in body) {
+      const due = String(body.dueDate || "");
+      patch.dueDate = DATE_RE.test(due) ? due : "";
+    }
+    if ("status" in body) {
+      const status = String(body.status || "");
+      if (status === "todo" || status === "completed") patch.status = status;
+    }
+    if ("priority" in body) {
+      patch.priority = body.priority === "high" || body.priority === "low" ? String(body.priority) : "normal";
+    }
+    await db.update(groupTasks).set(patch).where(eq(groupTasks.id, taskId));
+    return json({ task: { ...task, ...patch } });
+  }
+
+  if (body.action === "delete-task") {
+    const taskId = String(body.taskId || body.id || "");
+    if (!taskId) return json({ error: "missing" }, 400);
+    const [task] = await db.select().from(groupTasks).where(eq(groupTasks.id, taskId)).limit(1);
+    if (!task) return json({ error: "missing" }, 404);
+    const [group] = await db.select().from(groups).where(eq(groups.id, task.groupId)).limit(1);
+    if (task.createdBy !== user.id && (!group || !isMember(group, user.id))) return json({ error: "forbidden" }, 403);
+    await db.delete(groupTasks).where(eq(groupTasks.id, taskId));
+    return json({ ok: true, id: taskId });
   }
 
   return json({ error: "unknown action" }, 400);

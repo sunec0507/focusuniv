@@ -219,6 +219,18 @@ export async function deletePoll(pollId) {
   return postGroup("delete-poll", { pollId });
 }
 
+export async function addGroupTask(payload) {
+  return postGroup("add-task", payload);
+}
+
+export async function updateGroupTask(taskId, changes) {
+  return postGroup("update-task", { taskId, ...changes });
+}
+
+export async function deleteGroupTask(taskId) {
+  return postGroup("delete-task", { taskId });
+}
+
 export async function markAvailability(pollId, slots, extra = {}) {
   return postGroup("mark-availability", { pollId, slots, ...extra });
 }

@@ -43,3 +43,18 @@ export const pollResponses = pgTable(
   },
   (table) => [uniqueIndex("poll_responses_poll_user").on(table.pollId, table.userId)],
 );
+
+export const groupTasks = pgTable("group_tasks", {
+  id: text("id").primaryKey(),
+  groupId: text("group_id").notNull(),
+  title: text("title").notNull(),
+  note: text("note"),
+  assigneeName: text("assignee_name").notNull(),
+  dueDate: text("due_date").notNull(),
+  status: text("status").notNull().default("todo"),
+  priority: text("priority").notNull().default("normal"),
+  createdBy: text("created_by").notNull(),
+  createdByName: text("created_by_name").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
