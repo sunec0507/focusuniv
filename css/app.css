@@ -806,6 +806,61 @@ input, textarea { caret-color: var(--accent); }
 }
 textarea.field { min-height: 88px; resize: vertical; }
 .composer-extra { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+.event-times { display: grid; gap: 10px; }
+.time-field-wrap {
+  display: grid;
+  gap: 6px;
+}
+.time-field-label {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--muted);
+}
+.time-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 10px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+}
+.time-num {
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  padding-left: 8px;
+  padding-right: 8px;
+}
+.time-colon {
+  text-align: center;
+  font-weight: 700;
+  color: var(--muted);
+}
+.time-ampm {
+  height: 40px;
+  min-width: 58px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  background: var(--paper);
+  border-radius: var(--radius);
+  font-size: 13px;
+  font-weight: 700;
+}
+.time-ampm.pm {
+  background: var(--accent-soft);
+  border-color: var(--line-strong);
+}
+.event-color-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--muted);
+}
+.event-open {
+  min-width: 0;
+  text-align: left;
+  background: transparent;
+}
 
 .date-nav {
   display: flex;

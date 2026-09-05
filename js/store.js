@@ -1251,6 +1251,22 @@ export function addEvent(input) {
   emit();
 }
 
+export function updateEvent(id, patch = {}) {
+  const key = String(id || "");
+  if (!key) return;
+  const next = {};
+  if (patch.title != null) next.title = String(patch.title || "").trim();
+  if (patch.date != null) next.date = String(patch.date || "");
+  if (patch.startTime != null) next.startTime = String(patch.startTime || "09:00");
+  if (patch.endTime != null) next.endTime = String(patch.endTime || "10:00");
+  if (patch.color != null) next.color = String(patch.color || "#2563eb");
+  state = {
+    ...state,
+    events: state.events.map((item) => (item.id === key ? { ...item, ...next } : item)),
+  };
+  emit();
+}
+
 export function deleteEvent(id) {
   state = { ...state, events: state.events.filter((item) => item.id !== id) };
   emit();

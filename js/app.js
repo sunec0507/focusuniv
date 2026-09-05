@@ -591,6 +591,89 @@ function minutesToClock(total) {
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 }
 
+function eventColorValue(value) {
+  return /^#[0-9A-Fa-f]{6}$/.test(String(value || "")) ? String(value) : "#2563eb";
+}
+
+function clockFromMeridiem(hour12, minutes, isPm) {
+  let hour = Number(hour12);
+  if (!Number.isFinite(hour)) hour = 12;
+  hour = Math.min(12, Math.max(1, Math.round(hour)));
+  let mins = Number(minutes);
+  if (!Number.isFinite(mins)) mins = 0;
+  mins = Math.min(59, Math.max(0, Math.round(mins)));
+  const hours24 = (hour % 12) + (isPm ? 12 : 0);
+  return minutesToClock(hours24 * 60 + mins);
+}
+
+function clockParts(value, fallback = "09:00") {
+  const total = timeToMinutes(value || fallback);
+  const hours = Math.floor(total / 60) % 24;
+  const minutes = total % 60;
+  const isPm = hours >= 12;
+  return { hour12: hours % 12 || 12, minutes, isPm };
+}
+
+function timeField(name, value, label) {
+  const parts = clockParts(value);
+  const clock = clockFromMeridiem(parts.hour12, parts.minutes, parts.isPm);
+  const prefix = label || name;
+  return `
+    <label class="time-field-wrap">
+      ${label ? `<span class="time-field-label">${escapeHtml(label)}</span>` : ""}
+      <div class="time-field" data-time-field>
+        <input type="hidden" name="${escapeHtml(name)}" value="${clock}">
+        <input class="field time-num" data-act="time-hour" type="number" inputmode="numeric" min="1" max="12" value="${parts.hour12}" aria-label="${escapeHtml(prefix)} 시">
+        <span class="time-colon" aria-hidden="true">:</span>
+        <input class="field time-num" data-act="time-minute" type="number" inputmode="numeric" min="0" max="59" value="${String(parts.minutes).padStart(2, "0")}" aria-label="${escapeHtml(prefix)} 분">
+        <button type="button" class="time-ampm${parts.isPm ? " pm" : ""}" data-act="toggle-ampm" aria-pressed="${parts.isPm ? "true" : "false"}">${parts.isPm ? "오후" : "오전"}</button>
+      </div>
+    </label>`;
+}
+
+function syncTimeField(field) {
+  if (!field) return "";
+  const hourEl = field.querySelector("[data-act='time-hour']");
+  const minuteEl = field.querySelector("[data-act='time-minute']");
+  const ampmEl = field.querySelector("[data-act='toggle-ampm']");
+  const hidden = field.querySelector('input[type="hidden"]');
+  const clock = clockFromMeridiem(hourEl?.value, minuteEl?.value, ampmEl?.getAttribute("aria-pressed") === "true");
+  if (hidden) hidden.value = clock;
+  return clock;
+}
+
+function toggleAmPm(button) {
+  const next = button.getAttribute("aria-pressed") !== "true";
+  button.setAttribute("aria-pressed", next ? "true" : "false");
+  button.classList.toggle("pm", next);
+  button.textContent = next ? "오후" : "오전";
+  syncTimeField(button.closest("[data-time-field]"));
+}
+
+function polishTimeField(el) {
+  const field = el.closest("[data-time-field]");
+  if (!field) return;
+  const hourEl = field.querySelector("[data-act='time-hour']");
+  const minuteEl = field.querySelector("[data-act='time-minute']");
+  const clock = syncTimeField(field);
+  const parts = clockParts(clock);
+  if (hourEl) hourEl.value = String(parts.hour12);
+  if (minuteEl) minuteEl.value = String(parts.minutes).padStart(2, "0");
+}
+
+function eventFormFields(event) {
+  return `
+    <input class="field" name="title" placeholder="일정 제목" value="${escapeHtml(event?.title || "")}" required>
+    <input class="field" name="date" type="date" value="${escapeHtml(event?.date || dateKeyFrom(ui.date))}" required>
+    <div class="event-times">
+      ${timeField("startTime", event?.startTime || "09:00", "시작")}
+      ${timeField("endTime", event?.endTime || "10:00", "종료")}
+    </div>
+    <label class="event-color-row">색상
+      <input class="field cat-color" name="color" type="color" value="${escapeHtml(eventColorValue(event?.color))}">
+    </label>`;
+}
+
 function halfHourKeys(startTime, endTime) {
   const keys = [];
   let cursor = timeToMinutes(startTime);
@@ -1004,7 +1087,7 @@ function viewCalendar() {
                    <span class="cal-pct">${prog.percent}%</span>`
                 : ""
             }
-            ${events.map((event) => `<span class="event-chip" style="background:${event.color}">${escapeHtml(event.title)}</span>`).join("")}
+            ${events.map((event) => `<span class="event-chip" style="background:${eventColorValue(event.color)}">${escapeHtml(event.title)}</span>`).join("")}
           </button>`;
         })
         .join("")}
@@ -1025,7 +1108,7 @@ function viewCalendar() {
               .filter((event) => event.date === selectedKey)
               .map(
                 (event) =>
-                  `<div class="task"><div class="dot" style="background:${event.color}"></div><div><div class="task-title">${escapeHtml(event.title)}</div><div class="task-meta">${event.startTime}–${event.endTime}</div></div><span></span><button class="icon-btn" data-act="del-event" data-id="${event.id}">${icon("trash", 14)}</button></div>`,
+                  `<div class="task"><div class="dot" style="background:${eventColorValue(event.color)}"></div><button type="button" class="event-open" data-act="show-event" data-id="${event.id}"><div class="task-title">${escapeHtml(event.title)}</div><div class="task-meta">${event.startTime}–${event.endTime}</div></button><button class="icon-btn" data-act="del-event" data-id="${event.id}">${icon("trash", 14)}</button></div>`,
               )
               .join("")
           : `<div class="empty">일정이 없습니다.</div>`
@@ -3636,18 +3719,25 @@ function modalHtml() {
     </div></div>`;
   }
   if (ui.modal === "event") {
-    const selectedKey = dateKeyFrom(ui.date);
     return `<div class="modal-back" data-act="close-modal"><div class="modal" data-stop="1">
       <h2>일정 추가</h2>
       <form class="stack" data-act="add-event">
-        <input class="field" name="title" placeholder="일정 제목" required>
-        <input class="field" name="date" type="date" value="${selectedKey}" required>
-        <div class="composer-extra">
-          <input class="field" name="startTime" type="time" value="09:00">
-          <input class="field" name="endTime" type="time" value="10:00">
-        </div>
+        ${eventFormFields()}
         <button class="primary" type="submit">추가</button>
         <button class="ghost" type="button" data-act="close-modal">취소</button>
+      </form>
+    </div></div>`;
+  }
+  if (ui.modal === "event-edit") {
+    const event = (store.getState().events || []).find((item) => item.id === ui.eventId);
+    if (!event) return "";
+    return `<div class="modal-back" data-act="close-modal"><div class="modal" data-stop="1">
+      <h2>일정 수정</h2>
+      <form class="stack" data-act="save-event">
+        <input type="hidden" name="id" value="${escapeHtml(event.id)}">
+        ${eventFormFields(event)}
+        <button class="primary" type="submit">저장</button>
+        <button class="ghost" type="button" data-act="show-event" data-id="${event.id}">취소</button>
       </form>
     </div></div>`;
   }
@@ -3658,6 +3748,7 @@ function modalHtml() {
       <h2>${escapeHtml(event.title || "일정")}</h2>
       <p class="modal-meta">${escapeHtml(event.date || "")} · ${escapeHtml(event.startTime || "")}–${escapeHtml(event.endTime || "")}</p>
       <div class="stack">
+        <button class="primary" type="button" data-act="edit-event" data-id="${event.id}">수정</button>
         <button class="danger" type="button" data-act="del-event" data-id="${event.id}">삭제</button>
         <button class="ghost" type="button" data-act="close-modal">닫기</button>
       </div>
@@ -5406,6 +5497,11 @@ function onClick(event) {
   }
   const act = actEl.dataset.act;
   const id = actEl.dataset.id;
+  if (act === "toggle-ampm") {
+    event.preventDefault();
+    toggleAmPm(actEl);
+    return;
+  }
   if (ui.openTaskMenu && act !== "task-menu" && !event.target.closest(".task-menu-wrap")) {
     ui.openTaskMenu = null;
   }
@@ -6222,7 +6318,13 @@ function onClick(event) {
     ui.stopwatch = { running: false, accumulated: 0, startedAt: null };
   } else if (act === "calc") {
     applyCalc(actEl.dataset.key);
-  } else if (act === "open-event") ui.modal = "event";
+  } else if (act === "open-event") {
+    ui.eventId = null;
+    ui.modal = "event";
+  } else if (act === "edit-event") {
+    ui.eventId = id || ui.eventId;
+    ui.modal = "event-edit";
+  }
   else if (act === "close-modal") {
     if (!auth.user() || ui.deletingAccount) return;
     ui.modal = null;
@@ -6264,6 +6366,9 @@ function onClick(event) {
   }
   if (act === "open-course" || act === "edit-course") {
     requestAnimationFrame(() => document.querySelector("form[data-act='add-course'] [name='title']")?.focus());
+  }
+  if (act === "open-event" || act === "edit-event") {
+    requestAnimationFrame(() => document.querySelector("form[data-act='add-event'] [name='title'], form[data-act='save-event'] [name='title']")?.focus());
   }
   if (act === "rename-poll") {
     requestAnimationFrame(() => document.querySelector("form[data-act='save-poll-title'] [name='title']")?.focus());
@@ -6439,15 +6544,27 @@ function onSubmit(event) {
     ui.commentBlockId = blockId;
     render();
     return;
-  } else if (act === "add-event") {
-    store.addEvent({
+  } else if (act === "add-event" || act === "save-event") {
+    const startTime = data.get("startTime") || "09:00";
+    const endTime = data.get("endTime") || "10:00";
+    if (timeToMinutes(endTime) <= timeToMinutes(startTime)) {
+      alert("종료 시간이 시작 시간보다 늦어야 합니다.");
+      return;
+    }
+    const payload = {
       title: data.get("title"),
       date: data.get("date"),
-      startTime: data.get("startTime") || "09:00",
-      endTime: data.get("endTime") || "10:00",
-      color: "#2563eb",
-    });
+      startTime,
+      endTime,
+      color: eventColorValue(data.get("color")),
+    };
+    if (act === "save-event") {
+      store.updateEvent(data.get("id") || ui.eventId, payload);
+    } else {
+      store.addEvent(payload);
+    }
     ui.modal = null;
+    ui.eventId = null;
   } else if (act === "add-course") {
     const id = String(data.get("id") || "");
     const slots = store.normalizeSlots(ui.courseSlotsDraft);
@@ -6601,6 +6718,10 @@ function onSubmit(event) {
 
 function onInput(event) {
   const el = event.target;
+  if (el.dataset.act === "time-hour" || el.dataset.act === "time-minute") {
+    syncTimeField(el.closest("[data-time-field]"));
+    return;
+  }
   if (el.dataset.act === "course-color-pick") {
     applyCourseColorDraft(el.value);
     return;
@@ -6959,7 +7080,9 @@ async function boot() {
   document.addEventListener("submit", onSubmit);
   document.addEventListener("input", onInput);
   document.addEventListener("focusout", (event) => {
-    if (event.target?.dataset?.act === "pdf-text") {
+    const act = event.target?.dataset?.act;
+    if (act === "time-hour" || act === "time-minute") polishTimeField(event.target);
+    if (act === "pdf-text") {
       commitPdfText(event.target, { persist: true, removeEmpty: true });
     }
   });
