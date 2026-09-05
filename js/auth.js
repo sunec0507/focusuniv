@@ -249,6 +249,20 @@ export async function changeEmail(newEmail) {
   return currentUser;
 }
 
+export async function deleteAccount(email) {
+  if (!currentUser) throw new Error("로그인이 필요합니다.");
+  const response = await fetch("/api/delete-account", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(await authHeader()) },
+    body: JSON.stringify({ email: String(email || "").trim() }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || "계정을 삭제하지 못했습니다.");
+  }
+  return data;
+}
+
 export async function saveProfile(nickname) {
   if (!currentUser) return null;
   const response = await fetch("/api/profile", {

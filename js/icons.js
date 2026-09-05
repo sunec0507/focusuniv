@@ -27,6 +27,7 @@ const icons = {
   logout: "M10 17H7a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h3M14 7l5 5-5 5M19 12H10",
   menu: "M4 7h16M4 12h16M4 17h16",
   moreVertical: "M12 6.2v.01M12 12v.01M12 17.8v.01",
+  moreHorizontal: "M5 12h.01M12 12h.01M19 12h.01",
   search: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14ZM20 20l-3.5-3.5",
   alarm: "M6 7 4 5M18 7l2-2M12 9v4l2 1M6.5 18.5A7.5 7.5 0 1 1 17.5 18.5",
   page: "M8 4h6l4 4v12a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z",

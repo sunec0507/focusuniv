@@ -1,8 +1,10 @@
 import {
+  addDays,
   auxiliaryRemaining,
   dayProgress,
   focusElapsed,
   formatDateKey,
+  parseDateKey,
   uid,
 } from "./util.js";
 
@@ -27,10 +29,12 @@ export function defaultSettings() {
     notifications: { groupUpdates: true },
     fontSize: "md",
     fontFamily: "pretendard",
+    themeMode: "system",
     themeColor: "#2563eb",
     themeSchool: null,
     themeBgTint: false,
     customFont: null,
+    graduationCredits: 130,
   };
 }
 
@@ -347,9 +351,104 @@ function resolveTimetableId(timetableId) {
   return list[0]?.id || "";
 }
 
+function isDateKey(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""));
+}
+
+function normalizePriority(value) {
+  return value === "high" || value === "low" ? value : "normal";
+}
+
+function normalizeRepeat(value) {
+  if (!value || typeof value !== "object") return null;
+  const freq = value.freq === "weekly" ? "weekly" : value.freq === "daily" ? "daily" : "";
+  if (!freq) return null;
+  const until = isDateKey(value.until) ? value.until : null;
+  const seriesId = String(value.seriesId || "").trim();
+  return seriesId ? { freq, until, seriesId } : { freq, until };
+}
+
+function normalizeSubtasks(list) {
+  return (Array.isArray(list) ? list : [])
+    .map((item) => {
+      const title = String(item?.title || "").trim();
+      if (!title) return null;
+      return { id: item.id || uid("sub"), title, done: Boolean(item.done) };
+    })
+    .filter(Boolean);
+}
+
+function normalizeTask(task) {
+  if (!task || typeof task !== "object") return null;
+  return {
+    ...task,
+    priority: normalizePriority(task.priority),
+    repeat: normalizeRepeat(task.repeat),
+    subtasks: normalizeSubtasks(task.subtasks),
+  };
+}
+
 function pruneOrphanTasks(tasks, groups) {
   const ids = new Set((groups || []).map((group) => group.id));
-  return (Array.isArray(tasks) ? tasks : []).filter((task) => !task.groupId || ids.has(task.groupId));
+  return (Array.isArray(tasks) ? tasks : [])
+    .map(normalizeTask)
+    .filter((task) => task && (!task.groupId || ids.has(task.groupId)));
+}
+
+function seriesKey(task) {
+  return task.repeat?.seriesId || task.id;
+}
+
+function nextRepeatDate(dateKey, freq) {
+  return formatDateKey(addDays(parseDateKey(dateKey), freq === "weekly" ? 7 : 1));
+}
+
+function firstRepeatOnOrAfter(fromKey, freq, today) {
+  let cursor = fromKey;
+  for (let i = 0; i < 800 && cursor < today; i += 1) cursor = nextRepeatDate(cursor, freq);
+  return cursor;
+}
+
+function shiftDateKey(dateKey, fromKey, toKey) {
+  if (!isDateKey(dateKey) || !isDateKey(fromKey) || !isDateKey(toKey)) return dateKey;
+  const delta = Math.round((parseDateKey(toKey) - parseDateKey(fromKey)) / 86400000);
+  return formatDateKey(addDays(parseDateKey(dateKey), delta));
+}
+
+function collectRecurringClones(tasks, today) {
+  const list = Array.isArray(tasks) ? tasks : [];
+  const extras = [];
+  const seen = new Set();
+  const latestBySeries = new Map();
+  for (const task of list) {
+    if (!task.repeat?.freq || !isDateKey(task.scheduledDate)) continue;
+    const key = seriesKey(task);
+    const prev = latestBySeries.get(key);
+    if (!prev || task.scheduledDate > prev.scheduledDate) latestBySeries.set(key, task);
+  }
+  for (const [key, latest] of latestBySeries) {
+    const freq = latest.repeat.freq;
+    let next = "";
+    if (latest.scheduledDate < today) next = firstRepeatOnOrAfter(nextRepeatDate(latest.scheduledDate, freq), freq, today);
+    else if (latest.scheduledDate === today && latest.status === "completed") next = nextRepeatDate(today, freq);
+    else continue;
+    if (!isDateKey(next)) continue;
+    if (latest.repeat.until && next > latest.repeat.until) continue;
+    const exists = list.some((task) => seriesKey(task) === key && task.scheduledDate === next);
+    if (exists || seen.has(`${key}:${next}`)) continue;
+    seen.add(`${key}:${next}`);
+    extras.push({
+      ...latest,
+      id: uid("task"),
+      status: "todo",
+      focusedSeconds: 0,
+      scheduledDate: next,
+      dueDate: latest.dueDate ? shiftDateKey(latest.dueDate, latest.scheduledDate, next) : latest.dueDate,
+      subtasks: normalizeSubtasks(latest.subtasks).map((item) => ({ ...item, id: uid("sub"), done: false })),
+      repeat: { ...latest.repeat, seriesId: key },
+    });
+  }
+  return extras;
 }
 
 function isGroupMember(groupId) {
@@ -362,9 +461,13 @@ function mergeSettings(base, extra) {
   const b = extra || {};
   const notes = { ...a.notifications, ...b.notifications };
   delete notes.dailyReport;
+  const mode = b.themeMode ?? a.themeMode ?? "system";
+  const credits = Number(b.graduationCredits ?? a.graduationCredits);
   return {
     ...a,
     ...b,
+    themeMode: ["light", "dark", "system"].includes(mode) ? mode : "system",
+    graduationCredits: Number.isFinite(credits) && credits > 0 ? Math.min(400, Math.round(credits)) : 130,
     notifications: {
       groupUpdates: notes.groupUpdates !== false,
     },
@@ -390,6 +493,8 @@ export function calcGpa(records, { majorOnly = false } = {}) {
   const points43 = rows.reduce((sum, row) => sum + Number(row.credit || 0) * (GRADE_POINTS_43[row.grade] ?? 0), 0);
   return {
     totalCredit,
+    points45,
+    points43,
     gpa45: totalCredit ? points45 / totalCredit : 0,
     gpa43: totalCredit ? points43 / totalCredit : 0,
   };
@@ -431,6 +536,7 @@ function seed(now = new Date()) {
     activeTimer: null,
     auxiliaryTimer: null,
     notifications: [],
+    seenAssignedTaskIds: [],
     meta: {
       lastVisitDate: today,
       focusSection: "timer",
@@ -463,6 +569,9 @@ function stateFromRaw(raw) {
     projects: applyAnnotationSidecar(migrateProjects(Array.isArray(parsed.projects) ? parsed.projects : base.projects)),
     tasks: pruneOrphanTasks(parsed.tasks ?? base.tasks, parsed.groups ?? base.groups),
     notifications: migrateNotifications(parsed.notifications ?? base.notifications),
+    seenAssignedTaskIds: Array.isArray(parsed.seenAssignedTaskIds)
+      ? parsed.seenAssignedTaskIds.filter(Boolean).slice(-200)
+      : base.seenAssignedTaskIds,
     meta: { ...base.meta, ...parsed.meta },
   };
 }
@@ -520,7 +629,7 @@ export function bindAccount(userId) {
     state = seededState();
   }
   state = { ...state, currentMemberId: activeUserId };
-  listeners.forEach((fn) => fn(state));
+  if (!materializeRecurringTasks().length) listeners.forEach((fn) => fn(state));
 }
 
 export function setCurrentMemberId(id) {
@@ -574,6 +683,86 @@ export function getState() {
   return state;
 }
 
+function csvCell(value) {
+  const text = String(value ?? "");
+  if (/[",\n\r]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
+  return text;
+}
+
+export function exportBackupPayload() {
+  const {
+    activeTimer: _timer,
+    auxiliaryTimer: _aux,
+    currentMemberId: _member,
+    seenAssignedTaskIds: _seen,
+    ...rest
+  } = omitRetiredFields(state);
+  const settings = { ...(rest.settings || {}) };
+  if (settings.customFont && typeof settings.customFont === "object") {
+    settings.customFont = { name: settings.customFont.name || "업로드 폰트" };
+  }
+  const profile = { nickname: "", bio: "", ...(rest.profile || {}) };
+  if (typeof profile.photoUrl === "string" && profile.photoUrl.startsWith("data:")) {
+    profile.photoUrl = "";
+  }
+  return {
+    exportedAt: new Date().toISOString(),
+    app: "focusuniv",
+    version: 1,
+    categories: rest.categories || [],
+    tasks: rest.tasks || [],
+    events: rest.events || [],
+    timetables: rest.timetables || [],
+    primaryTimetableId: rest.primaryTimetableId || "",
+    coursePresetColors: rest.coursePresetColors || [],
+    customThemePresets: rest.customThemePresets || [],
+    gradeRecords: rest.gradeRecords || [],
+    projects: rest.projects || [],
+    groups: rest.groups || [],
+    members: rest.members || [],
+    profile,
+    settings,
+    sessions: rest.sessions || [],
+    notifications: rest.notifications || [],
+    meta: rest.meta || {},
+  };
+}
+
+export function exportGpaCsv() {
+  const rows = Array.isArray(state.gradeRecords) ? state.gradeRecords : [];
+  const lines = ["학기,과목명,학점,성적,전공여부"];
+  for (const row of rows) {
+    lines.push(
+      [
+        csvCell(row.semester),
+        csvCell(row.title),
+        csvCell(row.credit),
+        csvCell(row.grade),
+        csvCell(row.isMajor ? "전공" : "교양"),
+      ].join(","),
+    );
+  }
+  return `\uFEFF${lines.join("\n")}`;
+}
+
+export function purgeLocalAccount() {
+  persistEnabled = false;
+  clearTimeout(persistTimer);
+  persistTimer = 0;
+  const key = storageKey();
+  const ann = annotationKey();
+  try {
+    if (key) localStorage.removeItem(key);
+    if (ann) localStorage.removeItem(ann);
+  } catch {
+    /* ignore */
+  }
+  activeUserId = null;
+  state = seededState();
+  persistEnabled = true;
+  listeners.forEach((fn) => fn(state));
+}
+
 export function setRemoteSaver(fn) {
   remoteSave = fn;
 }
@@ -596,19 +785,55 @@ export function replaceState(next) {
     ),
     tasks: pruneOrphanTasks(incoming.tasks ?? state.tasks, incoming.groups ?? state.groups),
     notifications: migrateNotifications(incoming.notifications ?? state.notifications),
+    seenAssignedTaskIds: Array.isArray(incoming.seenAssignedTaskIds)
+      ? incoming.seenAssignedTaskIds.filter(Boolean).slice(-200)
+      : state.seenAssignedTaskIds || [],
     currentMemberId: activeUserId || incoming.currentMemberId || state.currentMemberId,
   };
+  const extras = collectRecurringClones(state.tasks, formatDateKey(new Date()));
+  if (extras.length) state = { ...state, tasks: [...state.tasks, ...extras] };
   emit();
 }
 
-export function tasksOn(dateKey) {
+function assigneeMatchesMine(name, mineNames) {
+  const raw = String(name || "").trim();
+  if (!raw || !mineNames?.size) return false;
+  if (mineNames.has(raw)) return true;
+  const wrapped = raw.match(/^나\((.+)\)$/);
+  return Boolean(wrapped && mineNames.has(wrapped[1].trim()));
+}
+
+export function tasksOn(dateKey, opts = {}) {
+  const onlyMine = Boolean(opts.onlyMine);
+  const mineNames = opts.mineNames instanceof Set ? opts.mineNames : new Set(opts.mineNames || []);
   return state.tasks.filter((task) => {
     if (task.groupId) {
       if (!isGroupMember(task.groupId)) return false;
+      if (onlyMine && !assigneeMatchesMine(task.assigneeName, mineNames)) return false;
       if (task.dueDate) return dateKey <= task.dueDate && task.status !== "completed";
     }
     return task.scheduledDate === dateKey;
   });
+}
+
+function daysBetween(fromKey, toKey) {
+  if (!isDateKey(fromKey) || !isDateKey(toKey)) return Number.POSITIVE_INFINITY;
+  return Math.round((parseDateKey(toKey) - parseDateKey(fromKey)) / 86400000);
+}
+
+export function upcomingDeadlines(days = 7) {
+  const today = formatDateKey(new Date());
+  const limit = Number.isFinite(Number(days)) ? Number(days) : 7;
+  return state.tasks
+    .filter((task) => {
+      if (!task.dueDate || task.status === "completed") return false;
+      if (task.groupId && !isGroupMember(task.groupId)) return false;
+      return daysBetween(today, task.dueDate) <= limit;
+    })
+    .sort((a, b) => {
+      if (a.dueDate === b.dueDate) return 0;
+      return a.dueDate < b.dueDate ? -1 : 1;
+    });
 }
 
 export function tasksInGroup(groupId) {
@@ -623,12 +848,153 @@ export function progressOn(dateKey) {
   return dayProgress(tasksOn(dateKey));
 }
 
+function mondayOfWeek(now = new Date()) {
+  const date = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const weekday = date.getDay();
+  return addDays(date, weekday === 0 ? -6 : 1 - weekday);
+}
+
+function sessionSeconds(session) {
+  return Math.max(0, Number(session?.durationSeconds) || 0);
+}
+
+export function focusStreak(now = new Date()) {
+  const days = new Set(
+    (state.sessions || [])
+      .filter((session) => sessionSeconds(session) > 0 && isDateKey(session.date))
+      .map((session) => session.date),
+  );
+  let streak = 0;
+  let cursor = formatDateKey(now);
+  while (days.has(cursor)) {
+    streak += 1;
+    cursor = formatDateKey(addDays(parseDateKey(cursor), -1));
+  }
+  return streak;
+}
+
+export function weeklyFocusSummary(now = new Date()) {
+  const labels = ["월", "화", "수", "목", "금", "토", "일"];
+  const start = mondayOfWeek(now);
+  const days = labels.map((label, index) => ({
+    date: formatDateKey(addDays(start, index)),
+    weekday: index + 1,
+    label,
+    seconds: 0,
+    byCategory: {},
+  }));
+  const byDate = Object.fromEntries(days.map((day) => [day.date, day]));
+  const byCategory = {};
+  let totalSeconds = 0;
+  for (const session of state.sessions || []) {
+    const row = byDate[session.date];
+    if (!row) continue;
+    const seconds = sessionSeconds(session);
+    if (!seconds) continue;
+    const categoryId = session.categoryId || "none";
+    row.seconds += seconds;
+    row.byCategory[categoryId] = (row.byCategory[categoryId] || 0) + seconds;
+    byCategory[categoryId] = (byCategory[categoryId] || 0) + seconds;
+    totalSeconds += seconds;
+  }
+  return {
+    weekStart: days[0].date,
+    weekEnd: days[6].date,
+    days,
+    totalSeconds,
+    byCategory,
+  };
+}
+
 export function categoryById(id) {
   return state.categories.find((item) => item.id === id);
 }
 
 export function projectById(id) {
   return state.projects.find((item) => item.id === id);
+}
+
+function plainSearchText(value) {
+  return String(value || "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function projectSearchText(page) {
+  const blocks =
+    Array.isArray(page?.tabs) && page.tabs.length
+      ? page.tabs.flatMap((tab) => tab.blocks || [])
+      : page?.blocks || [];
+  const parts = [page?.name];
+  for (const block of blocks) {
+    if (block?.name) parts.push(block.name);
+    if (block?.text) parts.push(plainSearchText(block.text));
+    if (Array.isArray(block?.headers)) parts.push(...block.headers);
+    if (Array.isArray(block?.rows)) parts.push(...block.rows.flat());
+  }
+  return parts.filter(Boolean).join(" ").toLowerCase();
+}
+
+export function noteMatches(page, query) {
+  const q = String(query || "").trim().toLowerCase();
+  if (!q) return true;
+  return projectSearchText(page).includes(q);
+}
+
+export function globalSearch(query) {
+  const q = String(query || "").trim().toLowerCase();
+  if (!q) return [];
+  const hits = [];
+  for (const task of state.tasks || []) {
+    if (task.groupId && !isGroupMember(task.groupId)) continue;
+    const hay = `${task.title || ""} ${task.note || ""}`.toLowerCase();
+    if (!hay.includes(q)) continue;
+    const group = (state.groups || []).find((item) => item.id === task.groupId);
+    hits.push({
+      type: "task",
+      id: task.id,
+      label: task.title || "할 일",
+      meta: [group?.name, task.dueDate || task.scheduledDate].filter(Boolean).join(" · "),
+      route: task.groupId ? `/groups/${task.groupId}` : "/today",
+    });
+  }
+  for (const table of state.timetables || []) {
+    for (const course of table.courses || []) {
+      const hay = `${course.title || ""} ${course.name || ""} ${course.professor || ""} ${course.room || ""}`.toLowerCase();
+      if (!hay.includes(q)) continue;
+      hits.push({
+        type: "course",
+        id: course.id,
+        label: course.title || course.name || "수업",
+        meta: [table.name, course.professor, course.room].filter(Boolean).join(" · "),
+        route: "/timetable",
+        timetableId: table.id,
+      });
+    }
+  }
+  for (const group of state.groups || []) {
+    if (!String(group.name || "").toLowerCase().includes(q)) continue;
+    hits.push({
+      type: "group",
+      id: group.id,
+      label: group.name || "그룹",
+      meta: `${(group.memberIds || []).length}명`,
+      route: `/groups/${group.id}`,
+    });
+  }
+  for (const page of state.projects || []) {
+    if (!noteMatches(page, q)) continue;
+    const group = page.groupId ? (state.groups || []).find((item) => item.id === page.groupId) : null;
+    hits.push({
+      type: "project",
+      id: page.id,
+      label: page.name || "제목 없음",
+      meta: group?.name || "프로젝트",
+      route: page.groupId ? `/groups/${page.groupId}/projects/${page.id}` : `/projects/${page.id}`,
+    });
+  }
+  return hits.slice(0, 40);
 }
 
 export function childPages(parentId, scopeGroupId) {
@@ -659,6 +1025,82 @@ export function unreadCount() {
   return state.notifications.filter((item) => !item.read).length;
 }
 
+function localSelfNames() {
+  const names = new Set(["나"]);
+  const nick = String(state.profile?.nickname || "").trim();
+  if (nick) {
+    names.add(nick);
+    names.add(`나(${nick})`);
+  }
+  return names;
+}
+
+function notificationDuplicate(note) {
+  return state.notifications.some((item) => {
+    if (item.type !== note.type) return false;
+    if (note.pollId) return item.pollId === note.pollId;
+    if (note.taskId) return item.taskId === note.taskId;
+    if (note.type === "group-join") return item.groupId === note.groupId && item.body === note.body;
+    return false;
+  });
+}
+
+export function rememberAssignedTaskIds(ids) {
+  const incoming = [...new Set((ids || []).filter(Boolean))];
+  if (!incoming.length) return;
+  const seen = new Set(state.seenAssignedTaskIds || []);
+  let changed = false;
+  for (const id of incoming) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    changed = true;
+  }
+  if (!changed) return;
+  state = { ...state, seenAssignedTaskIds: [...seen].slice(-200) };
+  emit();
+}
+
+export function takeNewAssignedTaskIds(ids) {
+  const incoming = [...new Set((ids || []).filter(Boolean))];
+  if (!state.meta?.assignedAlertsSeeded) {
+    state = {
+      ...state,
+      seenAssignedTaskIds: incoming.slice(-200),
+      meta: { ...state.meta, assignedAlertsSeeded: true },
+    };
+    emit();
+    return [];
+  }
+  const seen = new Set(state.seenAssignedTaskIds || []);
+  const fresh = incoming.filter((id) => !seen.has(id));
+  if (!fresh.length) return [];
+  state = { ...state, seenAssignedTaskIds: [...seen, ...fresh].slice(-200) };
+  emit();
+  return fresh;
+}
+
+export function pushNotification(input = {}) {
+  const type = String(input.type || "info");
+  if ((type === "group-join" || type === "task-assign") && state.settings?.notifications?.groupUpdates === false) {
+    return null;
+  }
+  const note = {
+    id: uid("notif"),
+    type,
+    title: String(input.title || "").trim() || "알림",
+    body: String(input.body || "").trim(),
+    groupId: input.groupId || undefined,
+    taskId: input.taskId || undefined,
+    pollId: input.pollId || undefined,
+    read: false,
+    createdAt: Date.now(),
+  };
+  if (notificationDuplicate(note)) return null;
+  state = { ...state, notifications: [note, ...state.notifications].slice(0, 40) };
+  emit();
+  return note;
+}
+
 export function markNotificationsRead() {
   state = {
     ...state,
@@ -667,7 +1109,16 @@ export function markNotificationsRead() {
   emit();
 }
 
+export function materializeRecurringTasks(today = formatDateKey(new Date())) {
+  const extras = collectRecurringClones(state.tasks, today);
+  if (!extras.length) return [];
+  state = { ...state, tasks: [...state.tasks, ...extras] };
+  emit();
+  return extras;
+}
+
 export function addTask(input) {
+  const repeat = normalizeRepeat(input.repeat);
   const task = {
     id: uid("task"),
     title: input.title.trim(),
@@ -679,9 +1130,25 @@ export function addTask(input) {
     scheduledDate: input.scheduledDate,
     status: "todo",
     focusedSeconds: 0,
+    priority: normalizePriority(input.priority),
+    repeat: repeat ? { ...repeat, seriesId: repeat.seriesId || uid("series") } : null,
+    subtasks: normalizeSubtasks(input.subtasks),
   };
-  if (task.groupId && input.dueDate) task.dueDate = input.dueDate;
+  if (isDateKey(input.dueDate)) task.dueDate = input.dueDate;
   state = { ...state, tasks: [...state.tasks, task] };
+  if (task.groupId && task.assigneeName) {
+    if (assigneeMatchesMine(task.assigneeName, localSelfNames())) {
+      rememberAssignedTaskIds([task.id]);
+    } else {
+      pushNotification({
+        type: "task-assign",
+        title: "할 일을 배정했습니다",
+        body: `${task.assigneeName} · ${task.title}`,
+        groupId: task.groupId,
+        taskId: task.id,
+      });
+    }
+  }
   emit();
   return task;
 }
@@ -694,12 +1161,64 @@ export function toggleTask(taskId) {
     ),
   };
   emit();
+  materializeRecurringTasks();
 }
 
 export function updateTask(taskId, changes) {
   state = {
     ...state,
-    tasks: state.tasks.map((task) => (task.id === taskId ? { ...task, ...changes } : task)),
+    tasks: state.tasks.map((task) => {
+      if (task.id !== taskId) return task;
+      const next = { ...task, ...changes };
+      if ("priority" in changes) next.priority = normalizePriority(changes.priority);
+      if ("repeat" in changes) {
+        const repeat = normalizeRepeat(changes.repeat);
+        next.repeat = repeat ? { ...repeat, seriesId: repeat.seriesId || task.repeat?.seriesId || uid("series") } : null;
+      }
+      if ("subtasks" in changes) next.subtasks = normalizeSubtasks(changes.subtasks);
+      if ("dueDate" in changes) next.dueDate = isDateKey(changes.dueDate) ? changes.dueDate : undefined;
+      return next;
+    }),
+  };
+  emit();
+}
+
+export function addSubtask(taskId, title) {
+  const label = String(title || "").trim();
+  if (!label) return null;
+  const item = { id: uid("sub"), title: label, done: false };
+  state = {
+    ...state,
+    tasks: state.tasks.map((task) =>
+      task.id === taskId ? { ...task, subtasks: [...normalizeSubtasks(task.subtasks), item] } : task,
+    ),
+  };
+  emit();
+  return item;
+}
+
+export function toggleSubtask(taskId, subId) {
+  state = {
+    ...state,
+    tasks: state.tasks.map((task) => {
+      if (task.id !== taskId) return task;
+      return {
+        ...task,
+        subtasks: normalizeSubtasks(task.subtasks).map((item) =>
+          item.id === subId ? { ...item, done: !item.done } : item,
+        ),
+      };
+    }),
+  };
+  emit();
+}
+
+export function deleteSubtask(taskId, subId) {
+  state = {
+    ...state,
+    tasks: state.tasks.map((task) =>
+      task.id === taskId ? { ...task, subtasks: normalizeSubtasks(task.subtasks).filter((item) => item.id !== subId) } : task,
+    ),
   };
   emit();
 }
@@ -834,6 +1353,22 @@ export function timetableIdForCourse(id) {
 export function addTimetable(name) {
   const list = state.timetables || [];
   const tt = makeTimetable(String(name || "").trim() || nextTimetableName(list), []);
+  state = { ...state, timetables: [...list, tt] };
+  emit();
+  return tt;
+}
+
+export function duplicateTimetable(id, newName) {
+  const list = state.timetables || [];
+  const source = list.find((item) => item.id === id);
+  if (!source) return null;
+  const copied = migrateCourses(source.courses).map((course) => ({
+    ...course,
+    id: uid("course"),
+    slots: (course.slots || []).map((slot) => ({ ...slot })),
+  }));
+  const fallback = `${source.name || "시간표"} 복사`;
+  const tt = makeTimetable(String(newName || "").trim() || fallback, copied);
   state = { ...state, timetables: [...list, tt] };
   emit();
   return tt;

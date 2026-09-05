@@ -4,7 +4,7 @@ Focusuniv is a student operate surface: cool gray paper, a rail sidebar, hairlin
 
 ## Surface
 
-Light operate UI for university planning. Sidebar rail on desktop, bottom tabs on small screens. Type is Pretendard; clocks use IBM Plex Mono. Radius is 8px. Accent `#2563EB` is for primary actions, the running ring, completion fill, and selected day — not decoration.
+Light operate UI for university planning. Sidebar rail on desktop, bottom tabs on small screens. Type is Pretendard; clocks use IBM Plex Mono. Radius is 8px. Accent `#2563EB` is for primary actions and the running ring. Selected chips and progress fills use `--accent-soft` or a mixed rail tone.
 
 ## Color
 
@@ -16,8 +16,8 @@ Light operate UI for university planning. Sidebar rail on desktop, bottom tabs o
 | `--ink` | `#111827` | Text, focus desk bar |
 | `--muted` | `#5b6472` | Meta |
 | `--line` | `#e5e7eb` | Hairlines |
-| `--accent` | `#2563eb` | Action, progress, ring |
-| `--accent-soft` | `#eff4ff` | Play, callout |
+| `--accent` | `#2563eb` | Primary action, running ring |
+| `--accent-soft` | `#eff4ff` | Selection, play, callout |
 | `--danger` | `#dc2626` | Destructive |
 | `--ok` | `#16a34a` | Exercise category |
 
@@ -45,4 +45,4 @@ One moment: the completion fill eases in with `cubic-bezier(0.16, 1, 0.3, 1)`. T
 
 ## Responsive
 
-860px collapses the rail to a five-item bottom nav. Project tree stacks above the editor. Task duration hides; play stays.
+860px collapses the rail to a four-item bottom nav plus More. Project tree stacks above the editor. Task duration hides; play stays. Today/timetable split stacks from 1080px so the timetable is not crushed.
