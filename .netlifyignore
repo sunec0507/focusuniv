@@ -1,0 +1,6 @@
+Claude outputs
+.git
+.netlify
+node_modules
+.env
+.env.*

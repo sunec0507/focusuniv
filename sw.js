@@ -1,4 +1,4 @@
-const CACHE = "focusuniv-shell-v1";
+const CACHE = "focusuniv-shell-v2";
 const PRECACHE = [
   "/",
   "/index.html",
@@ -39,28 +39,16 @@ self.addEventListener("fetch", (event) => {
   if (url.origin !== self.location.origin) return;
   if (url.pathname.startsWith("/api") || url.pathname.startsWith("/.netlify")) return;
 
-  if (request.mode === "navigate") {
-    event.respondWith(
-      fetch(request)
-        .then((response) => {
-          const copy = response.clone();
-          caches.open(CACHE).then((cache) => cache.put("/index.html", copy)).catch(() => {});
-          return response;
-        })
-        .catch(() => caches.match("/index.html")),
-    );
-    return;
-  }
-
   event.respondWith(
-    caches.match(request).then((cached) => {
-      if (cached) return cached;
-      return fetch(request).then((response) => {
-        if (!response || response.status !== 200 || response.type !== "basic") return response;
-        const copy = response.clone();
-        caches.open(CACHE).then((cache) => cache.put(request, copy)).catch(() => {});
+    fetch(request)
+      .then((response) => {
+        if (response && response.status === 200 && (response.type === "basic" || request.mode === "navigate")) {
+          const copy = response.clone();
+          const key = request.mode === "navigate" ? "/index.html" : request;
+          caches.open(CACHE).then((cache) => cache.put(key, copy)).catch(() => {});
+        }
         return response;
-      });
-    }),
+      })
+      .catch(() => (request.mode === "navigate" ? caches.match("/index.html") : caches.match(request))),
   );
 });
