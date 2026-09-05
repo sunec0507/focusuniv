@@ -148,8 +148,6 @@ const ui = {
   editCategoryId: null,
   editingTaskId: null,
   openTaskMenu: null,
-  todayFilter: "mine",
-  todayAllOpen: false,
   navMore: false,
   noteMoreOpen: false,
   searchQuery: "",
@@ -340,7 +338,7 @@ function personalFocusCard() {
   return `
     <section class="progress focus-week" aria-label="개인 집중 기록. 그룹에는 보이지 않습니다.">
       <div class="progress-head">
-        <span class="progress-label">나만 보는 기록</span>
+        <span class="progress-label">내 집중 기록</span>
         <span class="progress-value">${streak}일 연속 · ${weekLabel}</span>
       </div>
       <div class="focus-week-bars" role="img" aria-label="이번 주 요일별 집중 시간">
@@ -696,8 +694,8 @@ function taskRow(task, opts = {}) {
 }
 
 function categoryAdd(dateKey, categoryId) {
-  if (ui.addingCategory !== categoryId) return "";
-  return `
+  if (ui.addingCategory === categoryId) {
+    return `
       <form class="inline-add" data-act="add-task">
         <input class="field" name="title" data-add-title placeholder="할 일" required>
         <input class="field" name="note" placeholder="메모 (선택)">
@@ -708,73 +706,8 @@ function categoryAdd(dateKey, categoryId) {
           <button class="primary" type="submit">추가</button>
         </div>
       </form>`;
-}
-
-function defaultTodayCategoryId() {
-  return store.getState().categories[0]?.id || "school";
-}
-
-function dueUrgency(task) {
-  const due = task.dueDate;
-  if (!due) return 50;
-  const today = todayKey();
-  if (due < today) return 0;
-  if (due === today) return 1;
-  const start = new Date(`${today}T00:00:00`);
-  const end = new Date(`${due}T00:00:00`);
-  const days = Math.round((end.getTime() - start.getTime()) / 86400000);
-  return Number.isNaN(days) ? 50 : 2 + Math.min(20, days);
-}
-
-function importantTodayTasks(tasks, limit = 5) {
-  return tasks
-    .filter((task) => task.status !== "completed")
-    .slice()
-    .sort((a, b) => {
-      const pr = compareTaskPriority(a, b);
-      if (pr) return pr;
-      return dueUrgency(a) - dueUrgency(b);
-    })
-    .slice(0, limit);
-}
-
-function todayQuickAdd(dateKey) {
-  return `
-    <form class="today-quick" data-act="quick-add-task">
-      <input class="field" name="title" placeholder="할 일 추가" required autocomplete="off">
-      <input type="hidden" name="date" value="${dateKey}">
-      <button class="primary" type="submit">추가</button>
-    </form>`;
-}
-
-function todayCategoryBlock(dateKey, group) {
-  return `
-          <div class="group-title">
-            <span class="dot" style="background:${group.cat.color}"></span>
-            <span class="group-title-name">${escapeHtml(group.cat.name)}</span>
-            <button type="button" class="icon-btn group-add" data-act="start-add" data-cat="${group.cat.id}" aria-label="${escapeHtml(group.cat.name)}에 할 일 추가">${icon("plus", 14)}</button>
-          </div>
-          <div class="list">
-            ${group.tasks.map((task) => taskRow(task)).join("")}
-            ${categoryAdd(dateKey, group.cat.id)}
-          </div>`;
-}
-
-function todayFocusList(tasks) {
-  const top = importantTodayTasks(tasks);
-  return `
-    <div class="group-title">오늘 중요한 일</div>
-    <div class="list">
-      ${top.length ? top.map((task) => taskRow(task)).join("") : `<div class="empty-inline">위에 할 일을 넣으면 여기에 먼저 보입니다.</div>`}
-    </div>`;
-}
-
-function todayAllToggle(key, groups) {
-  return `
-    <button type="button" class="today-all-toggle${ui.todayAllOpen ? " on" : ""}" data-act="toggle-today-all" aria-expanded="${ui.todayAllOpen ? "true" : "false"}">
-      ${ui.todayAllOpen ? "카테고리 접기" : "전체 보기"}
-    </button>
-    ${ui.todayAllOpen ? `<div class="today-all">${groups.map((group) => todayCategoryBlock(key, group)).join("")}</div>` : ""}`;
+  }
+  return `<button class="add-row" data-act="start-add" data-cat="${categoryId}">${icon("plus", 16)} 새로운 할 일 추가</button>`;
 }
 
 function dateNav(which) {
@@ -806,14 +739,6 @@ function myAssigneeNames() {
   return names;
 }
 
-function todayFilterToggle() {
-  const mine = ui.todayFilter !== "all";
-  return `<div class="today-filter" role="group" aria-label="오늘 할 일 필터">
-    <button type="button" class="today-filter-chip ${mine ? "on" : ""}" data-act="today-filter" data-filter="mine" aria-pressed="${mine ? "true" : "false"}">내 할 일</button>
-    <button type="button" class="today-filter-chip ${mine ? "" : "on"}" data-act="today-filter" data-filter="all" aria-pressed="${mine ? "false" : "true"}">전체</button>
-  </div>`;
-}
-
 function upcomingDeadlineStrip() {
   const items = store.upcomingDeadlines(7);
   if (!items.length) return "";
@@ -841,25 +766,30 @@ function upcomingDeadlineStrip() {
 function viewToday(embedded = false) {
   const key = dateKeyFrom(ui.date);
   const strip = upcomingDeadlineStrip();
-  const tasks = store
-    .tasksOn(key, ui.todayFilter === "all" ? {} : { onlyMine: true, mineNames: myAssigneeNames() })
-    .slice()
-    .sort(compareTaskPriority);
+  const tasks = store.tasksOn(key);
   const groups = store.getState().categories.map((cat) => ({
     cat,
     tasks: tasks.filter((task) => task.categoryId === cat.id),
   }));
-  const body = `${todayQuickAdd(key)}${todayFilterToggle()}${todayFocusList(tasks)}${todayAllToggle(key, groups)}`;
+  const list = groups
+    .map(
+      (group) => `
+          <div class="group-title"><span class="dot" style="background:${group.cat.color}"></span>${escapeHtml(group.cat.name)}</div>
+          <div class="list">
+            ${group.tasks.map((task) => taskRow(task)).join("")}
+            ${categoryAdd(key, group.cat.id)}
+          </div>`,
+    )
+    .join("");
   if (embedded) {
-    return `${personalFocusCard()}${strip}<div class="embed-nav">${dateNav("today")}</div>${body}`;
+    return `${strip}<div class="embed-nav">${dateNav("today")}</div>${list}`;
   }
   const extra = `<button class="ghost" data-act="go-categories">${icon("settings", 14)} 카테고리 관리</button>${dateNav("today")}`;
   return `
     ${top("오늘 할 일", formatShortKoreanDate(ui.date), extra)}
-    ${personalFocusCard()}
     ${strip}
     <div class="today-split">
-      <div class="today-split-list">${body}</div>
+      <div class="today-split-list">${list}</div>
       ${viewTodaySchedule()}
     </div>`;
 }
@@ -946,7 +876,6 @@ function viewTimer(embedded = false) {
   }
   return `
     ${embedded ? "" : top("타이머", "할 일을 고른 뒤 원형 타이머가 채워집니다")}
-    ${personalFocusCard()}
     <div class="ring-wrap">
       <div class="ring">
         ${ringSvg(progress)}
@@ -1063,45 +992,44 @@ function viewCalendar() {
         .map((date) => {
           const key = formatDateKey(date);
           const out = date.getMonth() !== ui.month.getMonth();
-          const events = s.events.filter((event) => event.date === key);
+          const prog = store.progressOn(key);
+          const events = s.events.filter((event) => event.date === key).slice(0, 2);
           const isToday = key === todayKey();
           const isSelected = key === selectedKey;
-          const taskCount = store.tasksOn(key).length;
           return `<button class="cal-cell ${out ? "out" : ""} ${isToday ? "today" : ""} ${isSelected ? "selected" : ""}" data-act="pick-day" data-key="${key}">
             <span class="cal-num">${date.getDate()}</span>
             ${
-              events.length || taskCount
-                ? `<span class="cal-dots" aria-hidden="true">${events.length ? `<i class="event"></i>` : ""}${taskCount ? `<i class="task"></i>` : ""}</span>`
+              prog.total
+                ? `<span class="mini-track" title="이수율 ${prog.percent}%"><span class="mini-fill" style="transform:scaleX(${prog.percent / 100})"></span></span>
+                   <span class="cal-pct">${prog.percent}%</span>`
                 : ""
             }
+            ${events.map((event) => `<span class="event-chip" style="background:${event.color}">${escapeHtml(event.title)}</span>`).join("")}
           </button>`;
         })
         .join("")}
     </div>
-    <div class="cal-detail">
-      ${progressBlock(selectedKey, "선택한 날 진행")}
-      <div class="group-title">선택한 날 할 일</div>
-      <div class="list">
-        ${
-          store.tasksOn(selectedKey).length
-            ? store.tasksOn(selectedKey).map((task) => taskRow(task, { hidePlay: true, hideActions: true })).join("")
-            : `<div class="empty">할 일이 없습니다.</div>`
-        }
-      </div>
-      <div class="group-title">일정</div>
-      <div class="list">
-        ${
-          s.events.filter((event) => event.date === selectedKey).length
-            ? s.events
-                .filter((event) => event.date === selectedKey)
-                .map(
-                  (event) =>
-                    `<div class="task"><div class="dot" style="background:${event.color}"></div><div><div class="task-title">${escapeHtml(event.title)}</div><div class="task-meta">${event.startTime}–${event.endTime}</div></div><span></span><button class="icon-btn" data-act="del-event" data-id="${event.id}">${icon("trash", 14)}</button></div>`,
-                )
-                .join("")
-            : `<div class="empty">일정이 없습니다.</div>`
-        }
-      </div>
+    <div class="group-title">선택한 날 할 일</div>
+    <div class="list">
+      ${
+        store.tasksOn(selectedKey).length
+          ? store.tasksOn(selectedKey).map((task) => taskRow(task, { hidePlay: true, hideActions: true })).join("")
+          : `<div class="empty">할 일이 없습니다.</div>`
+      }
+    </div>
+    <div class="group-title">일정</div>
+    <div class="list">
+      ${
+        s.events.filter((event) => event.date === selectedKey).length
+          ? s.events
+              .filter((event) => event.date === selectedKey)
+              .map(
+                (event) =>
+                  `<div class="task"><div class="dot" style="background:${event.color}"></div><div><div class="task-title">${escapeHtml(event.title)}</div><div class="task-meta">${event.startTime}–${event.endTime}</div></div><span></span><button class="icon-btn" data-act="del-event" data-id="${event.id}">${icon("trash", 14)}</button></div>`,
+              )
+              .join("")
+          : `<div class="empty">일정이 없습니다.</div>`
+      }
     </div>`;
 }
 
@@ -3056,6 +2984,7 @@ function viewProfile() {
         </label>
         <button class="primary" type="submit">${ui.onboarding ? "시작하기" : "저장"}</button>
       </form>
+      ${ui.onboarding ? "" : personalFocusCard()}
     </div>`;
 }
 
@@ -5518,8 +5447,6 @@ function onClick(event) {
       ui.date = new Date();
       maybeMaterializeToday();
     }
-  } else if (act === "today-filter") {
-    ui.todayFilter = actEl.dataset.filter === "all" ? "all" : "mine";
   } else if (act === "go-deadline") {
     const groupId = actEl.dataset.group;
     go(groupId ? groupPath(groupId, "tasks") : "/today");
@@ -6309,11 +6236,8 @@ function onClick(event) {
     ui.newPageGroupId = "";
     ui.searchQuery = "";
     ui.searchHits = [];
-  } else if (act === "start-add") {
-    ui.addingCategory = actEl.dataset.cat;
-    ui.todayAllOpen = true;
-  } else if (act === "cancel-add") ui.addingCategory = null;
-  else if (act === "toggle-today-all") ui.todayAllOpen = !ui.todayAllOpen;
+  } else if (act === "start-add") ui.addingCategory = actEl.dataset.cat;
+  else if (act === "cancel-add") ui.addingCategory = null;
   else if (act === "toggle-more") ui.navMore = !ui.navMore;
   else if (act === "close-more") {
     if (event.target.closest(".more-sheet")) return;
@@ -6355,11 +6279,11 @@ function onSubmit(event) {
   event.preventDefault();
   const act = form.dataset.act;
   const data = new FormData(form);
-  if (act === "add-task" || act === "quick-add-task") {
+  if (act === "add-task") {
     store.addTask({
       title: data.get("title"),
-      scheduledDate: data.get("date") || dateKeyFrom(ui.date),
-      categoryId: data.get("categoryId") || defaultTodayCategoryId(),
+      scheduledDate: data.get("date"),
+      categoryId: data.get("categoryId") || "school",
       note: data.get("note") || "",
     });
     ui.addingCategory = null;

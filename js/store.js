@@ -803,13 +803,10 @@ function assigneeMatchesMine(name, mineNames) {
   return Boolean(wrapped && mineNames.has(wrapped[1].trim()));
 }
 
-export function tasksOn(dateKey, opts = {}) {
-  const onlyMine = Boolean(opts.onlyMine);
-  const mineNames = opts.mineNames instanceof Set ? opts.mineNames : new Set(opts.mineNames || []);
+export function tasksOn(dateKey) {
   return state.tasks.filter((task) => {
     if (task.groupId) {
       if (!isGroupMember(task.groupId)) return false;
-      if (onlyMine && !assigneeMatchesMine(task.assigneeName, mineNames)) return false;
       if (task.dueDate) return dateKey <= task.dueDate && task.status !== "completed";
     }
     return task.scheduledDate === dateKey;
