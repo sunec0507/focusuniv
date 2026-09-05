@@ -820,6 +820,7 @@ export function tasksOn(dateKey) {
   return state.tasks.filter((task) => {
     if (task.groupId) {
       if (!isGroupMember(task.groupId)) return false;
+      if (!assigneeMatchesMine(task.assigneeName, localSelfNames())) return false;
       if (task.dueDate) return dateKey <= task.dueDate && task.status !== "completed";
     }
     return task.scheduledDate === dateKey;
@@ -837,7 +838,10 @@ export function upcomingDeadlines(days = 7) {
   return state.tasks
     .filter((task) => {
       if (!task.dueDate || task.status === "completed") return false;
-      if (task.groupId && !isGroupMember(task.groupId)) return false;
+      if (task.groupId) {
+        if (!isGroupMember(task.groupId)) return false;
+        if (!assigneeMatchesMine(task.assigneeName, localSelfNames())) return false;
+      }
       return daysBetween(today, task.dueDate) <= limit;
     })
     .sort((a, b) => {
