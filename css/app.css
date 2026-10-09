@@ -3886,7 +3886,7 @@ button.tv-sched-row { cursor: pointer; }
 
 @media (max-width: 860px) {
   /* 모바일: 앱과 같은 순서 — 주간 → 오늘 시간표 → 할 일 → 이번 주 마감 */
-  .today-v2 { display: flex; flex-direction: column; gap: 20px; }
+  .today-v2 { display: flex; flex-direction: column; align-items: stretch; gap: 20px; }
   .tv-main, .tv-side { display: contents; }
   .tv-week { order: 1; }
   .tv-sched { order: 2; }
@@ -4101,3 +4101,18 @@ button.tv-sched-row { cursor: pointer; }
   .group-row .page-glyph .icon { width: 22px; height: 22px; }
   .group-row .task-title { font-size: 17px; font-weight: 700; }
 }
+
+/* ---- 오늘 할 일 주간 스트립: 요일+날짜를 한 칸(알약)에, 아래에 할 일 점 (앱과 동일) ---- */
+.tv-week-row { gap: 2px; }
+.tv-day { gap: 6px; padding: 2px 0; }
+.tv-pill { display: grid; place-items: center; align-content: center; gap: 4px; width: 40px; height: 60px; border-radius: 20px; }
+.tv-day:hover .tv-pill { background: var(--hover); }
+.tv-day .tv-day-label { font-size: 12px; font-weight: 600; }
+.tv-day .tv-date { display: block; width: auto; height: auto; border-radius: 0; font-size: 17px; font-weight: 700; line-height: 1; }
+.tv-day.today .tv-pill { background: var(--accent-soft); }
+.tv-day.today .tv-date { color: var(--accent); }
+.tv-day.sel .tv-pill { background: var(--ink); }
+.tv-day.sel .tv-date { background: transparent; color: var(--bg); font-weight: 800; }
+.tv-day.sel .tv-day-label { color: color-mix(in srgb, var(--bg) 72%, transparent); }
+.tv-marks { display: flex; align-items: center; justify-content: center; gap: 3px; height: 12px; color: var(--accent); }
+.tv-marks i { width: 5px; height: 5px; border-radius: 50%; }

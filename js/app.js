@@ -1151,10 +1151,15 @@ function todayWeekStrip() {
           const left = dayTasks.filter((task) => task.status !== "completed").length;
           const allDone = dayTasks.length > 0 && left === 0;
           const cls = ["tv-day", key === selectedKey ? "sel" : "", key === today ? "today" : "", index === 5 ? "sat" : "", index === 6 ? "sun" : ""].filter(Boolean).join(" ");
+          // 남은 할 일의 카테고리 색 점(최대 3개). 다 끝낸 날은 작은 체크 (앱과 같은 표시)
+          const dots = dayTasks
+            .filter((task) => task.status !== "completed")
+            .slice(0, 3)
+            .map((task) => `<i style="background:${store.categoryById(task.categoryId)?.color || "#2563eb"}"></i>`)
+            .join("");
           return `<button type="button" class="${cls}" data-act="pick-day" data-key="${key}" aria-label="${date.getMonth() + 1}월 ${date.getDate()}일${left ? `, 남은 할 일 ${left}개` : ""}">
-            <span class="tv-day-label">${label}</span>
-            <span class="tv-blob ${dayTasks.length ? "has" : ""} ${allDone ? "done" : ""}">${allDone ? icon("check", 14) : left ? left : ""}</span>
-            <span class="tv-date">${date.getDate()}</span>
+            <span class="tv-pill"><span class="tv-day-label">${label}</span><span class="tv-date">${date.getDate()}</span></span>
+            <span class="tv-marks">${allDone ? icon("check", 12) : dots}</span>
           </button>`;
         }).join("")}
       </div>
