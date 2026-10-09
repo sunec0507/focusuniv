@@ -3238,11 +3238,7 @@ function projectPageExtras(page, { parentAttr = "", groupId = "" } = {}) {
   const parentBtn = parentAttr ? `data-parent="${parentAttr}"` : "";
   const gid = groupId || page?.groupId || "";
   const groupBtn = gid ? `data-group="${gid}"` : "";
-  return `${
-    page?.groupId
-      ? `<button class="ghost" data-act="meet-ai" data-id="${page.id}">${icon("sparkle", 14)} AI로 정리</button>`
-      : ""
-  }<button class="ghost" data-act="new-folder" ${parentBtn} ${groupBtn}>새 폴더</button><button class="primary" data-act="new-page" ${parentBtn} ${groupBtn}>${icon("plus", 14)} 새 페이지</button>`;
+  return `<button class="ghost" data-act="new-folder" ${parentBtn} ${groupBtn}>새 폴더</button><button class="primary" data-act="new-page" ${parentBtn} ${groupBtn}>${icon("plus", 14)} 새 페이지</button>`;
 }
 
 function projectWorkspaceHtml(page, { desk = false, scope = null, showTop = true } = {}) {
@@ -5066,65 +5062,6 @@ function shiftDate(which, amount) {
   else {
     ui.date = addDays(ui.date, amount);
     maybeMaterializeToday();
-  }
-}
-
-function pagePlainText(page) {
-  const blocks =
-    Array.isArray(page.tabs) && page.tabs.length
-      ? page.tabs.flatMap((tab) => tab.blocks || [])
-      : page.blocks || [];
-  return blocks
-    .map((block) => {
-      if (block.type === "table") return [...(block.headers || []), ...(block.rows || []).flat()].join(" ");
-      if (block.type === "image" || block.type === "file" || block.type === "pdf" || block.type === "divider") return "";
-      return htmlToText(block.text || "");
-    })
-    .map((text) => text.replace(/\s+/g, " ").trim())
-    .filter(Boolean)
-    .join("\n");
-}
-
-function applyMeetingNotes(page, result) {
-  const extra = [];
-  const summary = String(result?.summary || "").trim();
-  if (summary) extra.push(store.newBlock("callout", summary));
-  for (const item of result?.decisions || []) {
-    const text = String(item || "").trim();
-    if (text) extra.push(store.newBlock("bullet", text));
-  }
-  if (extra.length) commitBlocks(page.id, [...page.blocks, ...extra]);
-  for (const item of result?.tasks || []) {
-    const title = String(item?.title || "").trim();
-    if (!title) continue;
-    store.addTask({
-      title,
-      assigneeName: item.assigneeName || "",
-      groupId: page.groupId,
-      categoryId: "work",
-      scheduledDate: item.dueDate || todayKey(),
-      dueDate: item.dueDate || todayKey(),
-    });
-  }
-}
-
-async function runMeetingAi(pageId) {
-  const page = store.projectById(pageId);
-  if (!page?.groupId) return;
-  const text = pagePlainText(page);
-  if (!text) {
-    alert("정리할 회의록 텍스트가 없습니다.");
-    return;
-  }
-  try {
-    const result = await auth.askCoach({ action: "meeting", text });
-    if (!result || result.error) throw new Error(result?.error || "empty");
-    applyMeetingNotes(page, result);
-    render();
-    ui.toast = { title: "회의록 정리", body: "요약과 할 일을 반영했습니다.", id: "" };
-    showToast(ui.toast, "group");
-  } catch {
-    alert("AI 연동이 설정되지 않았어요. netlify dev로 실행하고 OPENAI_API_KEY를 설정해주세요");
   }
 }
 
@@ -7206,9 +7143,6 @@ function onClick(event) {
       .catch(() => {
         alert("약속을 삭제하지 못했어요. 잠시 후 다시 시도해주세요.");
       });
-    return;
-  } else if (act === "meet-ai") {
-    runMeetingAi(id);
     return;
   } else if (act === "del-cat") store.deleteCategory(id);
   else if (act === "open-search") {
