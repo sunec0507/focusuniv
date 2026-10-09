@@ -3977,3 +3977,76 @@ button.tv-sched-row { cursor: pointer; }
   .tt-block { padding: 4px 3px 4px 6px; }
   .tt-name { font-size: 11px; line-height: 1.3; white-space: normal; overflow-wrap: anywhere; }
 }
+
+/* ---- 집중 화면 (열품타 스타일, 앱과 같은 구성) ---- */
+.desk.fz { display: block; background: #121212; --bg: #121212; }
+.fz-wrap { max-width: 560px; margin: 0 auto; padding: 16px 16px 48px; display: grid; gap: 14px; }
+.fz-top { display: flex; align-items: center; justify-content: space-between; height: 56px; padding: 0 6px; }
+.fz-total { margin: 0; color: #d1d1d6; font-size: 20px; font-weight: 500; }
+.fz-total b { color: #fff; font-weight: 500; font-variant-numeric: tabular-nums; }
+.fz-top-actions { display: flex; align-items: center; gap: 8px; }
+.fz-card { background: #000; border-radius: 24px; padding: 20px; display: grid; gap: 14px; }
+.fz-card-row { display: flex; align-items: center; }
+.fz-card-main { flex: 1; min-width: 0; }
+.fz-label { margin: 0; color: #e5e5ea; font-size: 15px; font-weight: 700; }
+.fz-clock-row { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+.fz-clock { color: #f2f2f7; font-size: 46px; font-weight: 800; letter-spacing: -1px; font-variant-numeric: tabular-nums; }
+.fz-round { width: 44px; height: 44px; border-radius: 50%; border: 0; display: grid; place-items: center; background: #e5e5ea; color: #121212; cursor: pointer; }
+.fz-avatar { width: 84px; display: grid; justify-items: center; gap: 6px; color: #fff; font-size: 12px; font-weight: 600; }
+.fz-task { display: flex; align-items: center; gap: 8px; padding-top: 14px; border-top: 1px solid #2c2c2e; }
+.fz-task b { flex: 1; min-width: 0; color: #fff; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fz-task small { color: #8e8e93; font-size: 12px; }
+.fz-stop { height: 46px; border: 0; border-radius: 23px; background: #2563eb; color: #fff; font-size: 15px; font-weight: 800; display: flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer; }
+.fz-todo { min-height: 360px; align-content: start; gap: 4px; }
+.fz-todo-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; }
+.fz-todo-head h2 { margin: 0; color: #fff; font-size: 22px; font-weight: 700; }
+.fz-todo-head span { color: #a1a1a6; font-size: 13px; }
+.fz-row { display: flex; align-items: center; gap: 12px; min-height: 56px; padding: 0 8px; border-radius: 14px; }
+.fz-row.current { background: #1c1c1e; }
+.fz-check { width: 22px; height: 22px; flex: none; border-radius: 50%; border: 2px solid var(--c); background: transparent; color: #121212; display: grid; place-items: center; padding: 0; cursor: pointer; }
+.fz-row.done .fz-check { background: var(--c); }
+.fz-row-body { flex: 1; min-width: 0; display: grid; padding: 8px 0; }
+.fz-row-body b { color: #fff; font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fz-row.done .fz-row-body b { color: #636366; text-decoration: line-through; }
+.fz-row-body small { color: #8e8e93; font-size: 11px; margin-top: 2px; }
+.fz-now { padding: 3px 8px; border-radius: 10px; background: #2563eb; color: #fff; font-size: 11px; font-weight: 800; }
+.fz-switch { width: 32px; height: 32px; border: 0; background: transparent; color: #a1a1a6; display: grid; place-items: center; cursor: pointer; border-radius: 50%; }
+.fz-switch:hover { background: #1c1c1e; color: #fff; }
+.fz-empty { color: #8e8e93; text-align: center; margin: 24px 0; }
+
+/* ---- 약속 잡기 (웬투밋·타임픽 방식, 앱과 같은 구성) ---- */
+.pv-people { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0 10px; }
+.pv-people span { display: inline-flex; align-items: center; gap: 3px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--muted); font-size: 12px; font-weight: 700; }
+.pv-people span.ok { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.pv-people small { color: var(--muted); font-size: 12px; margin-left: 4px; }
+.pv-seg { display: flex; padding: 4px; border-radius: 999px; background: var(--rail); margin-bottom: 8px; }
+.pv-seg button { flex: 1; height: 34px; border: 0; border-radius: 999px; background: transparent; color: var(--muted); font-weight: 700; font-size: 13px; cursor: pointer; }
+.pv-seg button.on { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(17, 24, 39, 0.08); }
+.pv-grid { display: grid; grid-template-columns: 44px repeat(var(--poll-cols, 1), minmax(0, 1fr)); column-gap: 2px; padding: 8px 8px 8px 0; border: 1px solid var(--line); border-radius: 12px; user-select: none; -webkit-user-select: none; touch-action: none; }
+.pv-corner { height: 38px; }
+.pv-day { display: grid; justify-items: center; align-content: end; padding-bottom: 6px; }
+.pv-day small { color: var(--muted); font-size: 11px; font-weight: 700; }
+.pv-day small.we { color: var(--danger); }
+.pv-day b { font-size: 13px; }
+.pv-time { height: 24px; margin-top: -7px; padding-right: 6px; text-align: right; color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.pv-cell { height: 24px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; padding: 0; cursor: pointer; }
+.pv-cell.hour { border-top: 1px solid var(--line-strong); }
+.pv-cell.focus { outline: 2px solid var(--ink); outline-offset: -2px; position: relative; z-index: 1; }
+.pv-cell.confirmed { outline: 2px solid var(--ok); outline-offset: -2px; }
+.pv-legend { display: flex; align-items: center; justify-content: center; gap: 4px; margin-top: 10px; color: var(--muted); font-size: 11px; }
+.pv-legend i { width: 22px; height: 14px; border-radius: 3px; border: 1px solid var(--line); }
+.pv-legend span { margin: 0 4px; }
+.pv-who, .pv-best { margin-top: 12px; padding: 12px; border-radius: 12px; background: var(--surface); }
+.pv-who b { font-size: 14px; }
+.pv-who div { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.pv-who span { padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; }
+.pv-who span.ok { background: var(--accent-soft); color: var(--accent); }
+.pv-who span.no { background: var(--rail); color: var(--muted); text-decoration: line-through; }
+.pv-best-title { display: block; margin-bottom: 4px; font-size: 15px; }
+.pv-best-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; }
+.pv-best-row + .pv-best-row { border-top: 1px solid var(--line); }
+.pv-best-row > div { flex: 1; min-width: 0; display: grid; }
+.pv-best-row small { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.pv-rank { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: var(--rail); color: var(--muted); font-size: 12px; font-weight: 800; flex: none; }
+.pv-rank.top { background: var(--accent); color: #fff; }
+.pv-best-row .primary { height: 34px; padding: 0 14px; border-radius: 999px; }

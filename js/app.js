@@ -3638,29 +3638,64 @@ function viewGroupSchedule(group) {
     </section>`;
 }
 
+// 웬투밋·타임픽 방식: '내 가능 시간'은 칠하기, '모두의 시간'은 진하기로 보기 (앱과 같은 구성)
+function pollHeat(count, total) {
+  if (!count) return "var(--surface)";
+  const pct = Math.round((0.18 + (count / Math.max(1, total)) * 0.82) * 100);
+  return `color-mix(in srgb, var(--accent) ${pct}%, transparent)`;
+}
+
+function pollBestRanges(dates, times, counts) {
+  const out = [];
+  for (const date of dates) {
+    let start = -1;
+    let run = 0;
+    const flush = (endIndex) => {
+      if (start < 0) return;
+      const endMin = timeToMinutes(times[endIndex]) + 30;
+      out.push({ date, start: times[start], end: minutesToClock(endMin), count: run, slot: `${date}-${times[start]}` });
+    };
+    times.forEach((time, index) => {
+      const c = counts[`${date}-${time}`] || 0;
+      if (c > 0 && (start < 0 || c === run)) {
+        if (start < 0) start = index;
+        run = c;
+      } else {
+        flush(index - 1);
+        start = c > 0 ? index : -1;
+        run = c;
+      }
+    });
+    flush(times.length - 1);
+  }
+  return out
+    .sort((a, b) => b.count - a.count || timeToMinutes(b.end) - timeToMinutes(b.start) - (timeToMinutes(a.end) - timeToMinutes(a.start)))
+    .slice(0, 3);
+}
+
 function viewPollGrid(poll, group) {
   const dates = Array.isArray(poll.dates) ? poll.dates : [];
   const times = halfHourKeys(poll.startTime || "09:00", poll.endTime || "22:00");
   const rows = pollResponsesFor(poll);
-  const memberCount = Math.max(1, (group.memberIds || []).length);
+  const memberIds = (group.memberIds || []).map(String);
+  const memberCount = Math.max(1, memberIds.length);
   const uid = auth.user()?.id;
   const canConfirm = group.createdBy && uid && group.createdBy === uid;
   const confirmed = poll.status === "confirmed" && poll.confirmedDate;
   const cancelled = poll.status === "cancelled";
+  const mineSlots = new Set(rows.find((row) => row.userId === uid)?.slots || []);
+  const mode = ui.pollMode?.[poll.id] || (mineSlots.size ? "group" : "mine");
   const counts = {};
-  let maxCount = 0;
   for (const date of dates) {
     for (const time of times) {
       const key = `${date}-${time}`;
-      const count = rows.filter((row) => (row.slots || []).includes(key)).length;
-      counts[key] = count;
-      if (count > maxCount) maxCount = count;
+      counts[key] = rows.filter((row) => (row.slots || []).includes(key)).length;
     }
   }
-  const hover = ui.pollHover?.pollId === poll.id ? ui.pollHover.slot : "";
-  const hoverNames = hover
-    ? rows.filter((row) => (row.slots || []).includes(hover)).map((row) => memberLabel(row.userId))
-    : [];
+  const responded = new Set(rows.filter((row) => (row.slots || []).length).map((row) => String(row.userId)));
+  const focus = ui.pollHover?.pollId === poll.id ? ui.pollHover.slot : "";
+  const focusWho = focus ? rows.filter((row) => (row.slots || []).includes(focus)).map((row) => String(row.userId)) : [];
+  const best = pollBestRanges(dates, times, counts);
   const result = confirmed
     ? `<div class="poll-result">
         <b>확정된 시간</b>
@@ -3678,8 +3713,60 @@ function viewPollGrid(poll, group) {
     : cancelled
       ? `<p class="page-date">이 약속 확정은 취소되었습니다. ${canConfirm ? "다시 시간을 확정할 수 있습니다." : ""}</p>`
       : "";
+  const dayHead = (date) => {
+    const d = parseDateKey(date);
+    const wd = ["일", "월", "화", "수", "목", "금", "토"][d.getDay()];
+    return `<div class="pv-day"><small class="${d.getDay() === 0 || d.getDay() === 6 ? "we" : ""}">${wd}</small><b>${d.getMonth() + 1}/${d.getDate()}</b></div>`;
+  };
+  const grid = `
+    <div class="pv-grid" style="--poll-cols:${dates.length}" data-poll-grid="${poll.id}" data-mode="${mode}">
+      <div class="pv-corner"></div>
+      ${dates.map(dayHead).join("")}
+      ${times
+        .map((time) => {
+          const hour = time.endsWith(":00");
+          return (
+            `<div class="pv-time">${hour ? time : ""}</div>` +
+            dates
+              .map((date) => {
+                const key = `${date}-${time}`;
+                const count = counts[key] || 0;
+                const mine = mineSlots.has(key);
+                const isConfirmed = confirmed && poll.confirmedDate === date && timeToMinutes(time) >= timeToMinutes(poll.confirmedStart || "") && timeToMinutes(time) < timeToMinutes(poll.confirmedEnd || "");
+                const bg = mode === "mine" ? (mine ? "var(--ok)" : "var(--surface)") : pollHeat(count, memberCount);
+                const label = `${pollDateLabel(date)} ${time}, 가능 ${count}/${memberCount}명${mine ? ", 내가 선택" : ""}`;
+                return `<button type="button" class="pv-cell ${hour ? "hour" : ""} ${focus === key ? "focus" : ""} ${isConfirmed ? "confirmed" : ""}" style="background:${bg}" data-act="${mode === "mine" ? "toggle-poll-slot" : "pick-poll-slot"}" data-poll="${poll.id}" data-slot="${key}" aria-pressed="${mine ? "true" : "false"}" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}"></button>`;
+              })
+              .join("")
+          );
+        })
+        .join("")}
+    </div>`;
+  const legend = `<div class="pv-legend"><span>0/${memberCount}</span>${Array.from({ length: memberCount + 1 }, (_, i) => `<i style="background:${pollHeat(i, memberCount)}"></i>`).join("")}<span>${memberCount}/${memberCount} 가능</span></div>`;
+  const whoCard =
+    mode === "group" && focus
+      ? `<div class="pv-who">
+          <b>${escapeHtml(focus.slice(0, 10) ? pollDateLabel(focus.slice(0, 10)) : "")} ${escapeHtml(focus.slice(11))} · ${focusWho.length}/${memberCount}명 가능</b>
+          <div>${memberIds.map((id) => `<span class="${focusWho.includes(id) ? "ok" : "no"}">${escapeHtml(memberLabel(id))}</span>`).join("")}</div>
+        </div>`
+      : "";
+  const bestCard =
+    mode === "group" && best.length && !confirmed
+      ? `<div class="pv-best">
+          <b class="pv-best-title">가장 많이 되는 시간</b>
+          ${best
+            .map(
+              (item, index) => `<div class="pv-best-row">
+                <span class="pv-rank ${index === 0 ? "top" : ""}">${index + 1}</span>
+                <div><b>${escapeHtml(pollDateLabel(item.date))} ${item.start}–${item.end}</b><small>${item.count}/${memberCount}명 가능${item.count === memberCount ? " · 모두 가능" : ""}</small></div>
+                ${canConfirm ? `<button type="button" class="primary" data-act="confirm-poll" data-id="${poll.id}" data-slot="${escapeHtml(item.slot)}">확정</button>` : ""}
+              </div>`,
+            )
+            .join("")}
+        </div>`
+      : "";
   return `
-    <article class="poll-card" data-poll-card="${poll.id}">
+    <article class="poll-card pv" data-poll-card="${poll.id}">
       <div class="sched-head poll-card-head">
         <div>
           <b>${escapeHtml(poll.title || "약속 잡기")}</b>
@@ -3702,38 +3789,22 @@ function viewPollGrid(poll, group) {
         }
       </div>
       ${result}
+      <div class="pv-people">
+        ${memberIds.map((id) => `<span class="${responded.has(id) ? "ok" : ""}">${escapeHtml(memberLabel(id))}${responded.has(id) ? icon("check", 11) : ""}</span>`).join("")}
+        <small>${responded.size}/${memberCount}명 응답</small>
+      </div>
       ${
         confirmed && ui.pollReselect !== poll.id
           ? ""
-          : `<div class="poll-grid-wrap">
-        <div class="poll-grid" style="--poll-cols:${dates.length}" data-poll-grid="${poll.id}">
-          <div class="poll-time"></div>
-          ${dates.map((date) => `<div class="poll-day">${escapeHtml(pollDateLabel(date))}</div>`).join("")}
-          ${times
-            .map(
-              (time) =>
-                `<div class="poll-time">${time}</div>` +
-                dates
-                  .map((date) => {
-                    const key = `${date}-${time}`;
-                    const count = counts[key] || 0;
-                    const mine = Boolean(uid && rows.some((row) => row.userId === uid && (row.slots || []).includes(key)));
-                    const best = maxCount > 0 && count === maxCount;
-                    const ratio = count / memberCount;
-                    return `<button type="button" class="poll-cell ${mine ? "mine" : ""} ${best ? "best" : ""} ${ui.pollHover?.slot === key && ui.pollHover?.pollId === poll.id ? "tip" : ""}" style="--hit:${ratio}" data-act="toggle-poll-slot" data-poll="${poll.id}" data-slot="${key}" aria-pressed="${mine ? "true" : "false"}" aria-label="${escapeHtml(pollDateLabel(date))} ${time}, 가능 ${count}/${memberCount}명${best ? ", 추천" : ""}${mine ? ", 내가 선택" : ""}"><span class="poll-count">${count}/${memberCount}</span>${best ? `<span class="poll-best-mark">추천</span>` : ""}</button>`;
-                  })
-                  .join(""),
-            )
-            .join("")}
-        </div>
-      </div>
-      <p class="poll-hint">${hoverNames.length ? `${escapeHtml(hover)} · ${hoverNames.map(escapeHtml).join(", ")}` : "칸을 누르거나 올리면 가능한 멤버가 보여요. 내가 고른 칸은 테두리로, 추천 칸은 추천 표시로 구분됩니다."}</p>
-      ${
-        canConfirm && !confirmed
-          ? `<button type="button" class="primary" data-act="confirm-poll" data-id="${poll.id}" data-slot="${escapeHtml(ui.pollPick[poll.id] || hover || "")}">선택한 시간으로 확정</button>
-             <p class="page-date">추천 칸을 고르거나, 칸을 누른 뒤 확정하세요.</p>`
-          : ""
-      }`
+          : `<div class="pv-seg" role="tablist">
+              <button type="button" class="${mode === "mine" ? "on" : ""}" data-act="poll-mode" data-id="${poll.id}" data-mode="mine">내 가능 시간</button>
+              <button type="button" class="${mode === "group" ? "on" : ""}" data-act="poll-mode" data-id="${poll.id}" data-mode="group">모두의 시간</button>
+            </div>
+            <p class="poll-hint">${mode === "mine" ? "되는 시간을 끌어서 칠하세요. 칠한 칸을 다시 끌면 지워집니다. 저장은 자동이에요." : "진할수록 되는 사람이 많아요. 칸을 누르면 누가 되는지 보여요."}</p>
+            <div class="poll-grid-wrap">${grid}</div>
+            ${mode === "group" ? legend : ""}
+            ${whoCard}
+            ${bestCard}`
       }
     </article>`;
 }
@@ -4335,48 +4406,97 @@ function applyCalc(key) {
   calc.fresh = false;
 }
 
-function viewFocus(section) {
+// 0:00:42 형식 (열품타 스타일)
+function focusClock(seconds) {
+  const safe = Math.max(0, Math.floor(seconds || 0));
+  const h = Math.floor(safe / 3600);
+  const m = Math.floor((safe % 3600) / 60);
+  const sec = safe % 60;
+  return `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+}
+
+function todayStudySeconds() {
+  const key = todayKey();
+  const saved = (store.getState().sessions || [])
+    .filter((session) => session.date === key)
+    .reduce((sum, session) => sum + (Number(session.durationSeconds) || 0), 0);
+  return saved + store.elapsedNow();
+}
+
+// 집중 화면: 앱과 같은 구성 — 오늘 공부 시간 / 현재 집중 시간 카드 / 오늘 할 일
+function viewFocus() {
   const s = store.getState();
   const task = s.tasks.find((item) => item.id === s.activeTimer?.taskId);
-  const tabs = [
-    { id: "today", label: "오늘 할 일" },
-    { id: "calendar", label: "캘린더" },
-    { id: "projects", label: "프로젝트" },
-    { id: "groups", label: "그룹" },
-  ];
-  const current = tabs.some((tab) => tab.id === section) ? section : "today";
-  const body = {
-    today: `${liveMeasure()}${viewToday(true)}`,
-    calendar: viewCalendar(),
-    projects: viewProjects(ui.notePageId),
-    groups: viewGroups(),
-  }[current];
+  const cat = store.categoryById(task?.categoryId);
+  const running = Boolean(s.activeTimer?.isRunning);
+  const todays = store
+    .tasksOn(todayKey())
+    .slice()
+    .sort((a, b) => Number(a.status === "completed") - Number(b.status === "completed"));
+  const left = todays.filter((item) => item.status !== "completed").length;
+  const rows = todays
+    .map((item) => {
+      const c = store.categoryById(item.categoryId);
+      const color = c?.color || "#2563eb";
+      const done = item.status === "completed";
+      const current = item.id === task?.id;
+      const mins = item.focusedSeconds ? ` · ${Math.round(item.focusedSeconds / 60)}분` : "";
+      return `<div class="fz-row ${current ? "current" : ""} ${done ? "done" : ""}">
+        <button type="button" class="fz-check" style="--c:${escapeHtml(color)}" data-act="toggle-task" data-id="${item.id}" aria-label="${done ? "완료 취소" : "완료"}">${done ? icon("check", 12) : ""}</button>
+        <div class="fz-row-body"><b>${escapeHtml(item.title)}</b><small>${escapeHtml(c?.name || "미분류")}${mins}</small></div>
+        ${
+          current
+            ? `<span class="fz-now">측정 중</span>`
+            : done
+              ? ""
+              : `<button type="button" class="fz-switch" data-act="switch-focus" data-id="${item.id}" aria-label="이 할 일로 측정 바꾸기" title="이 할 일로 측정 바꾸기">${icon("swap", 16)}</button>`
+        }
+      </div>`;
+    })
+    .join("");
   return `
-    <div class="desk">
+    <div class="desk fz">
       ${ui.nightEnter ? `<div class="desk-veil"></div>` : ""}
-      <div class="desk-bar">
-        <button class="night-x" data-act="leave-desk" aria-label="나가기">${icon("x")}</button>
-        <div class="desk-bar-mid">
-          <div class="desk-live" data-clock="desk">${clock(store.elapsedNow())}</div>
-          <div class="desk-task">${escapeHtml(task?.title || "측정 중")}</div>
+      <div class="fz-wrap">
+        <div class="fz-top">
+          <p class="fz-total">공부 <b data-clock="focus-today">${focusClock(todayStudySeconds())}</b></p>
+          <div class="fz-top-actions">
+            <div class="tools-wrap">
+              <button class="night-x" data-act="toggle-tools" aria-label="타이머·스톱워치·계산기">${icon("apps")}</button>
+              ${
+                ui.toolsOpen
+                  ? `<div class="tools-menu">
+                      <button data-act="open-tool" data-tool="timer">${icon("timer", 16)} 타이머</button>
+                      <button data-act="open-tool" data-tool="stopwatch">${icon("clock", 16)} 스톱워치</button>
+                      <button data-act="open-tool" data-tool="calculator">${icon("calc", 16)} 계산기</button>
+                    </div>`
+                  : ""
+              }
+            </div>
+            <button class="night-x" data-act="leave-desk" aria-label="나가기">${icon("x")}</button>
+          </div>
         </div>
-        <div class="tools-wrap">
-          <button class="night-x" data-act="toggle-tools" aria-label="측정 중 도구">${icon("apps")}</button>
-          ${
-            ui.toolsOpen
-              ? `<div class="tools-menu">
-                  <button data-act="open-tool" data-tool="timer">${icon("timer", 16)} 타이머</button>
-                  <button data-act="open-tool" data-tool="stopwatch">${icon("clock", 16)} 스톱워치</button>
-                  <button data-act="open-tool" data-tool="calculator">${icon("calc", 16)} 계산기</button>
-                </div>`
-              : ""
-          }
-        </div>
+
+        <section class="fz-card">
+          <div class="fz-card-row">
+            <div class="fz-card-main">
+              <p class="fz-label">현재 집중 시간</p>
+              <div class="fz-clock-row">
+                <span class="fz-clock" data-clock="focus">${focusClock(store.elapsedNow())}</span>
+                <button type="button" class="fz-round" data-act="${running ? "pause" : "resume"}" aria-label="${running ? "일시정지" : "계속"}">${running ? icon("pause", 22) : icon("play", 22)}</button>
+              </div>
+            </div>
+            <div class="fz-avatar">${icon("book", 40)}<span>${running ? "집중 중" : "일시정지"}</span></div>
+          </div>
+          <div class="fz-task"><span class="dot" style="background:${escapeHtml(cat?.color || "#2563eb")}"></span><b>${escapeHtml(task?.title || "측정 중")}</b><small>${escapeHtml(cat?.name || "")}</small></div>
+          <button type="button" class="fz-stop" data-act="finish">${icon("stop", 14)} 공부 기록 종료</button>
+        </section>
+
+        <section class="fz-card fz-todo">
+          <div class="fz-todo-head"><h2>오늘 할 일</h2><span>${left}개 남음</span></div>
+          ${rows || `<p class="fz-empty">오늘 할 일이 없어요.</p>`}
+        </section>
       </div>
-      <div class="desk-tabs">
-        ${tabs.map((tab) => `<a class="desk-tab ${current === tab.id ? "on" : ""}" href="#/focus/${tab.id}">${tab.label}</a>`).join("")}
-      </div>
-      <div class="desk-body">${body}</div>
       ${toolSheet()}
     </div>`;
 }
@@ -4977,6 +5097,12 @@ function patchClocks() {
   });
   document.querySelectorAll("[data-clock='desk']").forEach((el) => {
     el.textContent = clock(elapsed);
+  });
+  document.querySelectorAll("[data-clock='focus']").forEach((el) => {
+    el.textContent = focusClock(elapsed);
+  });
+  document.querySelectorAll("[data-clock='focus-today']").forEach((el) => {
+    el.textContent = focusClock(todayStudySeconds());
   });
   document.querySelectorAll("[data-clock='sw']").forEach((el) => {
     el.textContent = clock(stopwatchNow());
@@ -7189,6 +7315,12 @@ function onClick(event) {
       ui.pollGroupId = id;
       ui.modal = "poll";
     }
+  } else if (act === "poll-mode") {
+    ui.pollMode = { ...(ui.pollMode || {}), [id]: actEl.dataset.mode };
+    if (ui.pollHover?.pollId === id) ui.pollHover = null;
+  } else if (act === "pick-poll-slot") {
+    ui.pollHover = { pollId: actEl.dataset.poll, slot: actEl.dataset.slot };
+    ui.pollPick = { ...ui.pollPick, [actEl.dataset.poll]: actEl.dataset.slot };
   } else if (act === "toggle-poll-slot") {
     togglePollSlot(actEl.dataset.poll, actEl.dataset.slot);
     return;
@@ -7278,6 +7410,14 @@ function onClick(event) {
     }
   } else if (act === "auth-mode") {
     ui.authMode = actEl.dataset.mode === "signup" ? "signup" : "login";
+  } else if (act === "switch-focus") {
+    const st = store.getState();
+    const current = st.tasks.find((item) => item.id === st.activeTimer?.taskId);
+    const next = st.tasks.find((item) => item.id === id);
+    if (!current || !next || current.id === next.id) return;
+    if (!confirm(`'${next.title}'로 바꿀까요? 지금까지 측정한 시간은 '${current.title}'에 저장됩니다.`)) return;
+    store.finishTimer(current.title, current.categoryId);
+    store.startTimer(next.id);
   } else if (act === "leave-desk") {
     store.autoFinishActiveTimer();
     go("/today");
@@ -8453,7 +8593,7 @@ async function boot() {
     document.addEventListener("pointerdown", (event) => {
       const cell = event.target.closest("[data-act='toggle-poll-slot']");
       if (!cell || event.pointerType === "touch") return;
-      pollDrag = { pollId: cell.dataset.poll, seen: new Set([cell.dataset.slot]) };
+      pollDrag = { pollId: cell.dataset.poll, seen: new Set([cell.dataset.slot]), add: cell.getAttribute("aria-pressed") !== "true" };
       ui.pollPick = { ...ui.pollPick, [cell.dataset.poll]: cell.dataset.slot };
     });
     document.addEventListener("pointerover", (event) => {
@@ -8461,6 +8601,7 @@ async function boot() {
       const cell = event.target.closest("[data-act='toggle-poll-slot']");
       if (!cell || cell.dataset.poll !== pollDrag.pollId || pollDrag.seen.has(cell.dataset.slot)) return;
       pollDrag.seen.add(cell.dataset.slot);
+      if ((cell.getAttribute("aria-pressed") === "true") === pollDrag.add) return;
       togglePollSlot(cell.dataset.poll, cell.dataset.slot);
     });
     document.addEventListener("pointerup", () => {
