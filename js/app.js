@@ -150,7 +150,6 @@ const ui = {
   editCategoryId: null,
   editingTaskId: null,
   openTaskMenu: null,
-  navMore: false,
   noteMoreOpen: false,
   searchQuery: "",
   searchHits: [],
@@ -234,10 +233,10 @@ function dateKeyFrom(date) {
 function navItems() {
   return [
     // 앱 하단바와 같은 순서: 오늘 할 일 / 캘린더 / 타임라인 / 시간표 (+ 더보기: 내 자료 · 팀플 · 설정)
-    { href: "#/today", name: "today", label: "오늘 할 일", ic: "list", primary: true },
+    { href: "#/today", name: "today", label: "오늘 할 일", ic: "checkCircle", primary: true },
     { href: "#/calendar", name: "calendar", label: "캘린더", ic: "calendar", primary: true },
     { href: "#/timeline", name: "timeline", label: "타임라인", ic: "clock", primary: true },
-    { href: "#/timetable", name: "timetable", label: "시간표", ic: "timetable", primary: true },
+    { href: "#/timetable", name: "timetable", label: "시간표", ic: "apps", primary: true },
     { href: "#/projects", name: "projects", label: "내 자료", ic: "folder", primary: false },
     { href: "#/groups", name: "groups", label: "팀플", ic: "users", primary: false },
     { href: "#/settings", name: "settings", label: "설정", ic: "sliders", primary: false },
@@ -300,6 +299,28 @@ function side(active) {
     </aside>`;
 }
 
+// 폰 폭에서는 앱 화면과 같은 머리말(작은 라벨 + 큰 제목, 또는 뒤로 + 가운데 제목)을 쓴다
+function mobileTop(m) {
+  const back = m.back ? `<a class="mt-back" href="#${m.back}" aria-label="뒤로">${icon("chevronLeft", 22)}</a>` : "";
+  if (m.center) {
+    return `<div class="mtop mtop-center">${back || "<span></span>"}<h1>${escapeHtml(m.title)}</h1><span class="mtop-side">${m.side || ""}</span></div>`;
+  }
+  return `
+    <div class="mtop">
+      ${back}
+      <div class="mtop-row">
+        <div class="mtop-text">
+          ${m.kicker ? `<p class="mtop-kicker">${escapeHtml(m.kicker)}</p>` : ""}
+          <h1 class="mtop-title">${escapeHtml(m.title)}</h1>
+          ${m.sub ? `<p class="mtop-sub">${m.sub}</p>` : ""}
+        </div>
+        ${m.side ? `<div class="mtop-side">${m.side}</div>` : ""}
+      </div>
+      ${m.actions ? `<div class="mtop-actions">${m.actions}</div>` : ""}
+      ${m.below || ""}
+    </div>`;
+}
+
 function top(title, sub, extra = "", opts = {}) {
   const titleHtml = opts.titleAct
     ? `<h1 class="page-title page-title-act" data-act="${opts.titleAct}" role="button" tabindex="0">${escapeHtml(title)}</h1>`
@@ -308,7 +329,7 @@ function top(title, sub, extra = "", opts = {}) {
     ? `<a class="icon-btn top-back" href="#${opts.back}" aria-label="뒤로">${icon("chevronLeft")}</a>`
     : "";
   return `
-    <div class="topbar">
+    <div class="topbar${opts.m ? " has-m" : ""}">
       <div class="${opts.back ? "topbar-title-back" : ""}">
         ${backHtml}<div>
         ${titleHtml}
@@ -316,7 +337,7 @@ function top(title, sub, extra = "", opts = {}) {
         </div>
       </div>
       <div class="row-actions">${extra}</div>
-    </div>`;
+    </div>${opts.m ? mobileTop(opts.m) : ""}`;
 }
 
 function personalFocusCard() {
@@ -1369,7 +1390,18 @@ function viewTimeline() {
     .filter((group) => group.tasks.length > 0 || group.seconds > 0);
   const hours = Array.from({ length: 25 }, (_, hour) => hour);
   return `
-    ${top("공부 기록", formatShortKoreanDate(ui.timeline), dateNav("timeline"))}
+    ${top("공부 기록", formatShortKoreanDate(ui.timeline), dateNav("timeline"), {
+      m: {
+        title: formatShortKoreanDate(ui.timeline),
+        sub: "공부 기록",
+        side: `<b class="mtop-total">${formatDuration(total)}</b>`,
+        below: `<div class="m-daterow">
+          <button type="button" class="m-nav-btn soft" data-act="date-prev" data-which="timeline" aria-label="이전 날">${icon("chevronLeft", 18)}</button>
+          <span>${key.replace(/-/g, ". ")}</span>
+          <button type="button" class="m-nav-btn soft" data-act="date-next" data-which="timeline" aria-label="다음 날">${icon("chevronRight", 18)}</button>
+        </div>`,
+      },
+    })}
     <div class="tl-head">
       <span>분 단위 집중 기록</span>
       <b>${formatDuration(total)}</b>
@@ -1466,7 +1498,18 @@ function viewCalendar() {
       <button class="ghost" data-act="cal-today">오늘</button>
       <button class="ghost" data-act="month-next">${icon("chevronRight")}</button>
       <button class="primary" data-act="open-event">${icon("plus", 14)} 일정 추가</button>
-    `)}
+    `, {
+      m: {
+        kicker: "일정",
+        title: `${ui.month.getFullYear()}년 ${ui.month.getMonth() + 1}월`,
+        side: `<button type="button" class="m-pill" data-act="cal-today">오늘</button>`,
+        below: `<div class="m-monthnav">
+          <button type="button" class="m-nav-btn" data-act="month-prev" aria-label="이전 달">${icon("chevronLeft", 20)}</button>
+          <b>월간 일정</b>
+          <button type="button" class="m-nav-btn" data-act="month-next" aria-label="다음 달">${icon("chevronRight", 20)}</button>
+        </div>`,
+      },
+    })}
     <div class="cal-grid">
       ${week.map((name) => `<div class="cal-head">${name}</div>`).join("")}
       ${days
@@ -1824,8 +1867,17 @@ function viewTimetable() {
       ? `<button class="ghost" data-act="open-course-paste">${icon("paperclip", 14)} 붙여넣기로 추가</button><button class="primary" data-act="open-course">${icon("plus", 14)} 수업 추가</button>`
       : "";
   return `
-    ${top("시간표 · 성적", tab === "gpa" ? "시간표와 같은 학기의 성적을 직접 입력합니다" : "과목명 · 시간 · 강의실을 직접 입력", extra)}
-    <div class="gpa-tabs">
+    ${top("시간표 · 성적", tab === "gpa" ? "시간표와 같은 학기의 성적을 직접 입력합니다" : "과목명 · 시간 · 강의실을 직접 입력", extra, {
+      m: {
+        kicker: "학사",
+        title: "시간표 · 성적",
+        side:
+          tab === "grid"
+            ? `<button type="button" class="m-round" data-act="open-course-paste" aria-label="붙여넣기로 추가">${icon("paperclip", 18)}</button><button type="button" class="m-round" data-act="open-course" aria-label="수업 추가">${icon("plus", 18)}</button>`
+            : "",
+      },
+    })}
+    <div class="gpa-tabs tt-tabs">
       <button type="button" class="gpa-tab ${tab === "grid" ? "on" : ""}" data-act="tt-tab" data-tab="grid">주간 시간표</button>
       <button type="button" class="gpa-tab ${tab === "gpa" ? "on" : ""}" data-act="tt-tab" data-tab="gpa">학점 계산기</button>
     </div>
@@ -3249,7 +3301,13 @@ function projectWorkspaceHtml(page, { desk = false, scope = null, showTop = true
   const browsingFolder = !page || isFolderItem(page);
   const shared = Boolean(scope || page?.groupId);
   const title = shared ? "팀플 자료" : "내 자료";
-  const projectTop = (sub) => (desk || !showTop ? "" : top(title, sub, extras, { titleAct: "open-projects-root" }));
+  const projectTop = (sub) =>
+    desk || !showTop
+      ? ""
+      : top(title, sub, extras, {
+          titleAct: "open-projects-root",
+          m: shared ? null : page ? { back: "/projects", center: true, title: "내 자료" } : { back: "/more", kicker: "Workspace", title: "내 자료" },
+        });
   const shareBanner = shared
     ? `<div class="share-banner"><b>팀플 멤버에게 공유되는 자료입니다</b><span data-page-save="${page?.id || ""}">${pageSaveLabel(ui.pageSave[page?.id] || "")}</span></div>`
     : "";
@@ -3329,14 +3387,23 @@ function viewGroups(groupId) {
         <div class="empty"><b>이 팀플에 접근할 수 없습니다</b><p>탈퇴했거나 초대되지 않은 그룹의 자료는 볼 수 없습니다.</p><a class="primary" href="#/groups">팀플 목록</a></div>`;
     }
     return `
-      ${top("팀플", "팀플 그룹 · 초대 코드로 최대 8명", `<button class="ghost" data-act="join-group">참여</button><button class="primary" data-act="new-group">그룹 만들기</button>`)}
-      <div class="list">
+      ${top("팀플", "팀플 그룹 · 초대 코드로 최대 8명", `<button class="ghost" data-act="join-group">참여</button><button class="primary" data-act="new-group">그룹 만들기</button>`, {
+        m: {
+          back: "/more",
+          kicker: "Together",
+          title: "팀플",
+          sub: "할 일, 자료, 약속을 팀과 함께 다룹니다. 초대코드로 참여하세요.",
+          actions: `<button class="ghost" data-act="join-group">코드로 참여</button><button class="primary" data-act="new-group">그룹 만들기</button>`,
+        },
+      })}
+      <div class="group-title m-only">내 그룹</div>
+      <div class="list group-list">
         ${
           mine.length
             ? mine
                 .map(
                   (item) =>
-                    `<a class="task" href="#/groups/${item.id}"><span class="page-glyph" style="background:#2563eb">${icon("users", 12)}</span><div><div class="task-title">${escapeHtml(item.name)}</div><div class="task-meta">코드 ${item.inviteCode} · ${item.memberIds.length}명</div></div></a>`,
+                    `<a class="task group-row" href="#/groups/${item.id}"><span class="page-glyph" style="background:#2563eb">${icon("users", 12)}</span><div><div class="task-title">${escapeHtml(item.name)}</div><div class="task-meta">${item.memberIds.length}명 · 코드 ${item.inviteCode}</div></div><span class="more-chev m-only">${icon("chevronRight", 18)}</span></a>`,
                 )
                 .join("")
             : `<div class="empty">아직 팀플 그룹이 없습니다.</div>`
@@ -3354,7 +3421,17 @@ function viewGroups(groupId) {
     tab === "projects" ? projectPageExtras(scopedPage, { parentAttr, groupId: group.id }) : ""
   }<button class="ghost" data-act="leave-group" data-id="${group.id}">나가기</button>`;
   return `
-    ${top(group.name, `팀플 그룹 · 초대 코드 ${group.inviteCode}`, extras)}
+    ${top(group.name, `팀플 그룹 · 초대 코드 ${group.inviteCode}`, extras, {
+      m:
+        tab === "projects"
+          ? null
+          : {
+              back: "/groups",
+              kicker: `팀플 · 초대 코드 ${group.inviteCode}`,
+              title: group.name,
+              side: `<button class="ghost m-small" data-act="leave-group" data-id="${group.id}">나가기</button>`,
+            },
+    })}
     <div class="gpa-tabs">
       <button type="button" class="gpa-tab ${tab === "tasks" ? "on" : ""}" data-act="group-tab" data-tab="tasks" data-group="${group.id}">할 일</button>
       <button type="button" class="gpa-tab ${tab === "links" || tab === "projects" ? "on" : ""}" data-act="group-tab" data-tab="links" data-group="${group.id}">링크</button>
@@ -4197,6 +4274,29 @@ function settingsDisplay() {
     </details>`;
 }
 
+function viewMore() {
+  const unread = store.unreadCount();
+  const rows = [
+    { href: "#/projects", ic: "folder", label: "내 자료", sub: "프로젝트와 메모" },
+    { href: "#/groups", ic: "users", label: "팀플", sub: "할 일, 자료, 약속" },
+    { href: "#/settings", ic: "settings", label: "설정", sub: "알림, 표시", badge: unread },
+  ];
+  return `
+    ${top("더보기", "내 자료 · 팀플 · 설정", "", { m: { kicker: "Focusuniv", title: "더보기" } })}
+    <div class="more-list">
+      ${rows
+        .map(
+          (row) => `<a class="more-row" href="${row.href}">
+            <span class="more-ic">${icon(row.ic, 20)}</span>
+            <span class="more-text"><b>${row.label}</b><small>${row.sub}</small></span>
+            ${row.badge ? `<span class="nav-badge">${row.badge}</span>` : ""}
+            <span class="more-chev">${icon("chevronRight", 18)}</span>
+          </a>`,
+        )
+        .join("")}
+    </div>`;
+}
+
 function viewSettings() {
   const tab = ui.settingsTab || "account";
   const tabs = [
@@ -4214,7 +4314,7 @@ function viewSettings() {
     display: settingsDisplay(),
   }[tab];
   return `
-    ${top("설정", "계정과 화면을 이 기기에서 조정합니다")}
+    ${top("설정", "계정과 화면을 이 기기에서 조정합니다", "", { m: { back: "/more", center: true, title: "설정" } })}
     <div class="settings-page">
       <nav class="settings-nav">
         ${tabs
@@ -4859,33 +4959,16 @@ function modalHtml() {
   return "";
 }
 
-function moreSheetHtml(active) {
-  if (!ui.navMore) return "";
-  return `
-    <div class="more-back" data-act="close-more">
-      <div class="more-sheet" data-stop="1">
-        <p class="more-sheet-label">더보기</p>
-        ${moreNavItems()
-          .map(
-            (item) =>
-              `<a class="${navActiveName(active) === item.name ? "on" : ""}" href="${item.href}">${icon(item.ic, 18)} ${item.label}${navBadge(item)}</a>`,
-          )
-          .join("")}
-      </div>
-    </div>`;
-}
-
 function bottomNavHtml(active) {
-  const moreOn = ui.navMore || moreNavItems().some((item) => item.name === navActiveName(active));
+  const moreOn = active === "more" || moreNavItems().some((item) => item.name === navActiveName(active));
   const unread = store.unreadCount();
   return `
     <nav class="bottom-nav">
       ${primaryNavItems()
         .map((item) => `<a class="${navActiveName(active) === item.name ? "active" : ""}" href="${item.href}">${icon(item.ic, 18)}<span>${item.label}</span></a>`)
         .join("")}
-      <button type="button" class="${moreOn ? "active" : ""}" data-act="toggle-more" aria-expanded="${ui.navMore ? "true" : "false"}">${icon("moreHorizontal", 18)}<span>더보기</span>${unread ? `<i class="bn-dot" aria-hidden="true"></i>` : ""}</button>
-    </nav>
-    ${moreSheetHtml(active)}`;
+      <a class="${moreOn ? "active" : ""}" href="#/more">${icon("moreHorizontal", 18)}<span>더보기</span>${unread ? `<i class="bn-dot" aria-hidden="true"></i>` : ""}</a>
+    </nav>`;
 }
 
 function layout(active, body, desk = false) {
@@ -4952,6 +5035,7 @@ export function render() {
   else if (name === "groups") html = layout("groups", viewGroups(id));
   else if (name === "profile") html = layout("profile", viewProfile());
   else if (name === "settings") html = layout("settings", viewSettings());
+  else if (name === "more") html = layout("more", viewMore());
   else if (name === "categories") html = layout("categories", viewCategories());
   else html = layout("today", viewToday());
   root.innerHTML = html;
@@ -7375,11 +7459,6 @@ function onClick(event) {
     ui.searchHits = [];
   } else if (act === "start-add") ui.addingCategory = actEl.dataset.cat;
   else if (act === "cancel-add") ui.addingCategory = null;
-  else if (act === "toggle-more") ui.navMore = !ui.navMore;
-  else if (act === "close-more") {
-    if (event.target.closest(".more-sheet")) return;
-    ui.navMore = false;
-  }
   else if (act === "note-more-toggle") {
     ui.noteMoreOpen = !ui.noteMoreOpen;
     if (!ui.noteMoreOpen) {
@@ -8367,7 +8446,6 @@ async function boot() {
     const next = parseHash().name;
     if (lastRouteName === "focus" && next !== "focus") store.autoFinishActiveTimer();
     lastRouteName = next;
-    ui.navMore = false;
     if (next === "groups") maybeRefreshGroupBundle();
     render();
   });

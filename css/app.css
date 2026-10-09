@@ -3586,45 +3586,6 @@ button.folder-crumb:hover { background: var(--hover); color: var(--ink); }
 }
 .bottom-nav a.active,
 .bottom-nav button.active { color: var(--ink); }
-.more-back {
-  position: fixed;
-  inset: 0;
-  background: rgba(17, 24, 39, 0.28);
-  z-index: 24;
-  display: flex;
-  align-items: flex-end;
-}
-.more-sheet {
-  width: 100%;
-  background: var(--paper);
-  border-top: 1px solid var(--line);
-  border-radius: 16px 16px 0 0;
-  padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
-  display: grid;
-  gap: 4px;
-}
-.more-sheet-label {
-  margin: 0 4px 8px;
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--muted);
-}
-.more-sheet a {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 44px;
-  padding: 0 10px;
-  border-radius: var(--radius);
-  color: var(--ink);
-  font-size: 15px;
-  font-weight: 650;
-}
-.more-sheet a.on { background: var(--accent-soft); }
-
-@media (min-width: 861px) {
-  .more-back { display: none; }
-}
 
 @media (max-width: 860px) {
   .shell { grid-template-columns: 1fr; }
@@ -4035,3 +3996,108 @@ button.tv-sched-row { cursor: pointer; }
 .pv-rank { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: var(--rail); color: var(--muted); font-size: 12px; font-weight: 800; flex: none; }
 .pv-rank.top { background: var(--accent); color: #fff; }
 .pv-best-row .primary { height: 34px; padding: 0 14px; border-radius: 999px; }
+
+/* ---- 폰 폭: 앱 화면과 같은 머리말 · 더보기 · 하단바 (2026-10) ---- */
+.mtop, .m-only { display: none; }
+.more-list { display: grid; gap: 4px; max-width: 560px; }
+.more-row {
+  display: flex; align-items: center; gap: 14px; min-height: 72px; padding: 0 12px;
+  border-radius: 14px; color: var(--ink); text-decoration: none;
+}
+.more-row:hover { background: var(--hover); }
+.more-ic { display: grid; place-items: center; width: 44px; height: 44px; flex: none; border-radius: 12px; background: var(--accent-soft); color: var(--accent); }
+.more-text { display: grid; gap: 2px; flex: 1; min-width: 0; }
+.more-text b { font-size: 17px; font-weight: 700; }
+.more-text small { color: var(--muted); font-size: 13px; }
+.more-row .nav-badge { margin-left: 0; }
+.more-chev { display: inline-grid; color: var(--ink); }
+.more-chev.m-only { display: none; }
+
+@media (max-width: 860px) {
+  .main { padding: 12px 16px 120px; }
+  .topbar.has-m { display: none; }
+  .m-only { display: block; }
+  .more-chev.m-only { display: inline-grid; margin-left: auto; }
+
+  /* 머리말: 작은 라벨 + 큰 제목 (앱 '학사 / 시간표 · 성적' 형태) */
+  .mtop { display: block; margin: 4px 0 14px; }
+  .mt-back { display: inline-grid; place-items: center; width: 36px; height: 36px; margin: 0 0 4px -8px; color: var(--ink); }
+  .mtop-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+  .mtop-text { min-width: 0; }
+  .mtop-kicker { margin: 0 0 2px; color: var(--muted); font-size: 13px; font-weight: 600; }
+  .mtop-title { margin: 0; font-size: 30px; font-weight: 800; letter-spacing: -0.6px; line-height: 1.3; }
+  .mtop-sub { margin: 4px 0 0; color: var(--muted); font-size: 14px; line-height: 1.5; }
+  .mtop-side { display: flex; align-items: center; gap: 8px; flex: none; padding-top: 6px; }
+  .mtop-actions { display: flex; gap: 8px; margin-top: 14px; }
+  .mtop-actions > * { flex: 1; height: 44px; border-radius: 12px; }
+  .mtop-total { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  /* 뒤로 + 가운데 제목 (앱 설정 화면) */
+  .mtop-center {
+    display: grid; grid-template-columns: 40px 1fr 40px; align-items: center;
+    height: 56px; margin: -12px -16px 12px; padding: 0 8px;
+    border-bottom: 1px solid var(--line);
+  }
+  .mtop-center .mt-back { margin: 0; }
+  .mtop-center h1 { margin: 0; text-align: center; font-size: 17px; font-weight: 700; }
+  .m-pill { height: 40px; padding: 0 16px; border: 0; border-radius: 20px; background: var(--accent-soft); color: var(--accent); font-size: 14px; font-weight: 700; }
+  .m-small { height: 34px; padding: 0 12px; border-radius: 17px; font-size: 13px; }
+  .m-round { display: inline-grid; place-items: center; width: 40px; height: 40px; padding: 0; border: 0; border-radius: 50%; background: var(--surface); color: var(--ink); }
+  .m-nav-btn { display: inline-grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--ink); }
+  .m-nav-btn.soft { background: var(--rail); }
+  .m-monthnav { display: flex; align-items: center; justify-content: space-between; margin-top: 18px; }
+  .m-monthnav b { font-size: 16px; }
+  .m-daterow {
+    display: flex; align-items: center; justify-content: space-between; margin: 12px -16px 0; padding: 8px 16px 0;
+    border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; font-weight: 700;
+  }
+
+  /* 하단바: 앱과 같이 파란 활성색, 배경색 그대로 */
+  .bottom-nav { background: var(--bg); padding-top: 6px; }
+  .bottom-nav a { font-size: 11px; gap: 4px; }
+  .bottom-nav a .icon { width: 24px; height: 24px; }
+  .bottom-nav a.active { color: var(--accent); }
+  .bottom-nav a { position: relative; }
+  .quick-fab { width: 56px; height: 56px; right: 16px; bottom: calc(84px + env(safe-area-inset-bottom)); }
+
+  /* 더보기 */
+  .more-list { gap: 0; margin: 0 -4px; }
+  .more-row { min-height: 80px; padding: 0 4px; }
+
+  /* 캘린더: 머리말 아래 바로 월 격자 */
+  .m-monthnav + * { margin-top: 0; }
+
+  /* 타임라인: 앱처럼 왼쪽 기록 목록 + 오른쪽 시간 막대를 나란히 */
+  .tl-head { display: none; }
+  .tl-board { grid-template-columns: minmax(0, 56%) minmax(0, 44%); margin: 0 -16px; border-radius: 0; border-left: 0; border-right: 0; background: var(--bg); }
+  .tl-grid { border-top: 0; }
+  .tl-tasks { padding: 8px 8px 24px; }
+  .tl-group { background: var(--paper); border-radius: 8px; margin-bottom: 12px; }
+  .tl-record { min-height: 52px; padding: 7px 8px; gap: 8px; }
+  .tl-record .task-title { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tl-record .task-meta { font-size: 10px; }
+  .tl-record > div { min-width: 0; }
+  .tl-record .dur { font-size: 10px; color: var(--muted); }
+  .tl-group-head { min-height: 38px; padding: 0 8px; }
+
+  /* 시간표: 앱처럼 꽉 찬 색 블록 + 흰 글씨, 분할 탭 */
+  .tt-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 0; padding: 4px; border-radius: 22px; background: var(--rail); border: 0; margin-bottom: 10px; }
+  .tt-tabs .gpa-tab { display: grid; place-items: center; text-align: center; height: 36px; border: 0; border-radius: 18px; background: transparent; color: var(--muted); font-size: 13px; font-weight: 700; }
+  .tt-tabs .gpa-tab.on { background: var(--surface); color: var(--ink); box-shadow: none; }
+  .tt-tabs .gpa-tab::after { display: none; }
+  .tt-block {
+    background: var(--tt-color, var(--accent)); color: #fff; border: 0; border-radius: 0; box-shadow: none;
+  }
+  .tt-block:hover, .tt-block.now { background: var(--tt-color, var(--accent)); }
+  .tt-block.now { outline: 2px solid var(--ink); outline-offset: -2px; }
+  .tt-block .tt-room { color: rgba(255, 255, 255, 0.9); }
+  .tt-block.event { color: var(--ink); }
+
+  /* 팀플 목록: 앱처럼 아이콘 타일 + 화살표 */
+  .group-list { background: transparent; border: 0; gap: 4px; }
+  .group-row { min-height: 72px; border: 0; }
+  .group-row { display: flex; align-items: center; gap: 14px; }
+  .group-row > div { flex: 1; min-width: 0; }
+  .group-row .page-glyph { display: grid; place-items: center; flex: none; width: 44px; height: 44px; border-radius: 12px; background: var(--accent-soft) !important; color: var(--accent); }
+  .group-row .page-glyph .icon { width: 22px; height: 22px; }
+  .group-row .task-title { font-size: 17px; font-weight: 700; }
+}

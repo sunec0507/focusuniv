@@ -1,5 +1,6 @@
 const icons = {
   check: "M5 12.5 9.5 17 19 7.5",
+  checkCircle: "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0ZM8.5 12.5l2.5 2.5 4.5-5",
   play: "M8 6.5v11L18 12 8 6.5Z",
   pause: "M8 6v12M16 6v12",
   stop: "M7 7h10v10H7z",
