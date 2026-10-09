@@ -236,12 +236,14 @@ function dateKeyFrom(date) {
 
 function navItems() {
   return [
+    // 앱 하단바와 같은 순서: 오늘 할 일 / 캘린더 / 타임라인 / 시간표 (+ 더보기: 내 자료 · 팀플 · 설정)
     { href: "#/today", name: "today", label: "오늘 할 일", ic: "list", primary: true },
     { href: "#/calendar", name: "calendar", label: "캘린더", ic: "calendar", primary: true },
+    { href: "#/timeline", name: "timeline", label: "타임라인", ic: "clock", primary: true },
     { href: "#/timetable", name: "timetable", label: "시간표", ic: "timetable", primary: true },
-    { href: "#/projects", name: "projects", label: "내 자료", ic: "folder", primary: true },
-    { href: "#/timeline", name: "timeline", label: "공부 기록", ic: "clock", primary: false },
+    { href: "#/projects", name: "projects", label: "내 자료", ic: "folder", primary: false },
     { href: "#/groups", name: "groups", label: "팀플", ic: "users", primary: false },
+    { href: "#/settings", name: "settings", label: "설정", ic: "sliders", primary: false },
   ];
 }
 
@@ -250,11 +252,19 @@ function primaryNavItems() {
 }
 
 function moreNavItems() {
-  return [
-    ...navItems().filter((item) => !item.primary),
-    { href: "#/profile", name: "profile", label: "프로필", ic: "user" },
-    { href: "#/settings", name: "settings", label: "설정", ic: "sliders" },
-  ];
+  return navItems().filter((item) => !item.primary);
+}
+
+// 프로필·카테고리 관리는 오늘 할 일 상단 버튼에서 들어가므로 메뉴에서는 '오늘 할 일'로 표시
+function navActiveName(active) {
+  if (active === "focus" || active === "profile" || active === "categories") return "today";
+  return active;
+}
+
+function navBadge(item) {
+  if (item.name !== "settings") return "";
+  const count = store.unreadCount();
+  return count ? `<span class="nav-badge">${count}</span>` : "";
 }
 
 function side(active) {
@@ -269,18 +279,22 @@ function side(active) {
         </div>
       </a>
       <nav class="nav">
-        ${navItems()
+        ${primaryNavItems()
           .map(
             (item) =>
-              `<a class="${active === item.name || (active === "focus" && item.name === "today") ? "active" : ""}" href="${item.href}">${icon(item.ic, 16)} ${item.label}</a>`,
+              `<a class="${navActiveName(active) === item.name ? "active" : ""}" href="${item.href}">${icon(item.ic, 16)} ${item.label}</a>`,
+          )
+          .join("")}
+        <div class="nav-sep" role="separator"></div>
+        ${moreNavItems()
+          .map(
+            (item) =>
+              `<a class="${navActiveName(active) === item.name ? "active" : ""}" href="${item.href}">${icon(item.ic, 16)} ${item.label}${navBadge(item)}</a>`,
           )
           .join("")}
       </nav>
       <div class="side-foot">
         <button type="button" class="side-foot-link side-quick-add" data-act="open-quick-add">${icon("plus", 16)} 빠른 추가</button>
-        <button type="button" class="side-foot-link" data-act="open-search">${icon("search", 16)} 검색</button>
-        <a class="side-foot-link ${active === "profile" ? "active" : ""}" href="#/profile">${icon("user", 16)} 프로필</a>
-        <a class="side-foot-link ${active === "settings" ? "active" : ""}" href="#/settings">${icon("sliders", 16)} 설정</a>
         <div class="account">
           <span>${escapeHtml(me?.email || me?.user_metadata?.name || "계정")}</span>
           <button class="ghost" data-act="auth">로그아웃</button>
@@ -289,68 +303,23 @@ function side(active) {
     </aside>`;
 }
 
-function bell() {
-  const count = store.unreadCount();
-  const notes = store.getState().notifications.slice(0, 8);
-  return `
-    <div class="bell-wrap">
-      <button class="icon-btn" data-act="bell" aria-label="알림">${icon("bell")}
-        ${count ? `<span class="badge">${count}</span>` : ""}
-      </button>
-      ${
-        ui.panel
-          ? `<div class="panel">
-            ${
-              notes.length
-                ? (() => {
-                    const work = notes.filter((note) => note.type !== "update");
-                    const product = notes.filter((note) => note.type === "update");
-                    const block = (label, list) =>
-                      list.length
-                        ? `<p class="bell-label">${label}</p>${list
-                            .map(
-                              (note) =>
-                                `<button class="note ${note.type === "update" ? "note-product" : ""}" data-act="go-notification" data-id="${note.id}" data-group="${escapeHtml(note.groupId || "")}" data-task="${escapeHtml(note.taskId || "")}" data-poll="${escapeHtml(note.pollId || "")}">
-                          <b>${escapeHtml(note.title)}</b>
-                          <div class="task-meta">${escapeHtml(note.body)}</div>
-                        </button>`,
-                            )
-                            .join("")}`
-                        : "";
-                    return `${block("업무", work)}${block("앱 안내", product)}`;
-                  })()
-                : `<div class="empty">아직 알림이 없습니다.</div>`
-            }
-          </div>`
-          : ""
-      }
-    </div>`;
-}
-
 function top(title, sub, extra = "", opts = {}) {
   const titleHtml = opts.titleAct
     ? `<h1 class="page-title page-title-act" data-act="${opts.titleAct}" role="button" tabindex="0">${escapeHtml(title)}</h1>`
     : `<h1 class="page-title">${escapeHtml(title)}</h1>`;
+  const backHtml = opts.back
+    ? `<a class="icon-btn top-back" href="#${opts.back}" aria-label="뒤로">${icon("chevronLeft")}</a>`
+    : "";
   return `
     <div class="topbar">
-      <div>
+      <div class="${opts.back ? "topbar-title-back" : ""}">
+        ${backHtml}<div>
         ${titleHtml}
         ${sub ? `<p class="page-date">${sub}</p>` : ""}
+        </div>
       </div>
-      <div class="row-actions"><button type="button" class="icon-btn top-search" data-act="open-search" aria-label="검색">${icon("search")}</button>${extra}${bell()}</div>
+      <div class="row-actions">${extra}</div>
     </div>`;
-}
-
-function progressBlock(dateKey, label) {
-  const { done, total, percent } = store.progressOn(dateKey);
-  return `
-    <section class="progress" aria-label="${escapeHtml(label)}">
-      <div class="progress-head">
-        <span class="progress-label">${escapeHtml(label)}</span>
-        <span class="progress-value">${percent}% · ${done}/${total || 0}</span>
-      </div>
-      <div class="track"><div class="fill" style="transform:scaleX(${percent / 100})"></div></div>
-    </section>`;
 }
 
 function personalFocusCard() {
@@ -1114,100 +1083,179 @@ function myAssigneeNames() {
   return names;
 }
 
-function upcomingDeadlineStrip() {
+const WEEK_LABELS_MON = ["월", "화", "수", "목", "금", "토", "일"];
+
+// 월요일 시작 기준 이 달의 몇째 주인지
+function weekOfMonth(date) {
+  const first = new Date(date.getFullYear(), date.getMonth(), 1);
+  const firstMon = (first.getDay() + 6) % 7;
+  return Math.ceil((date.getDate() + firstMon) / 7);
+}
+
+function mondayOf(date) {
+  const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  return addDays(d, -((d.getDay() + 6) % 7));
+}
+
+function todayTopBar() {
+  const profile = store.getState().profile || {};
+  const nick = profile.nickname || selfDisplayName();
+  const avatar = profile.photoUrl
+    ? `<img src="${escapeHtml(profile.photoUrl)}" alt="">`
+    : icon("user", 18);
+  return `
+    <div class="today-top">
+      <a class="today-top-btn" href="#/profile" aria-label="프로필" title="${escapeHtml(nick || "프로필")}">${avatar}</a>
+      <button type="button" class="today-top-btn" data-act="go-categories" aria-label="카테고리 관리" title="카테고리 관리">${icon("gear", 18)}</button>
+    </div>`;
+}
+
+function todayWeekStrip() {
+  const selected = ui.date instanceof Date ? ui.date : new Date();
+  const selectedKey = dateKeyFrom(selected);
+  const today = todayKey();
+  const start = mondayOf(selected);
+  return `
+    <section class="tv-week" aria-label="이번 주">
+      <div class="tv-week-top">
+        <b>${selected.getMonth() + 1}월 ${weekOfMonth(selected)}주차</b>
+        <div class="tv-week-nav">
+          ${selectedKey !== today ? `<button type="button" class="tv-today-pill" data-act="date-today" data-which="today">오늘</button>` : ""}
+          <button type="button" class="tv-arrow" data-act="week-shift" data-dir="-1" aria-label="이전 주">${icon("chevronLeft", 16)}</button>
+          <button type="button" class="tv-arrow" data-act="week-shift" data-dir="1" aria-label="다음 주">${icon("chevronRight", 16)}</button>
+        </div>
+      </div>
+      <div class="tv-week-row">
+        ${WEEK_LABELS_MON.map((label, index) => {
+          const date = addDays(start, index);
+          const key = dateKeyFrom(date);
+          const dayTasks = store.tasksOn(key);
+          const left = dayTasks.filter((task) => task.status !== "completed").length;
+          const allDone = dayTasks.length > 0 && left === 0;
+          const cls = ["tv-day", key === selectedKey ? "sel" : "", key === today ? "today" : "", index === 5 ? "sat" : "", index === 6 ? "sun" : ""].filter(Boolean).join(" ");
+          return `<button type="button" class="${cls}" data-act="pick-day" data-key="${key}" aria-label="${date.getMonth() + 1}월 ${date.getDate()}일${left ? `, 남은 할 일 ${left}개` : ""}">
+            <span class="tv-day-label">${label}</span>
+            <span class="tv-blob ${dayTasks.length ? "has" : ""} ${allDone ? "done" : ""}">${allDone ? icon("check", 14) : left ? left : ""}</span>
+            <span class="tv-date">${date.getDate()}</span>
+          </button>`;
+        }).join("")}
+      </div>
+    </section>`;
+}
+
+function todayScheduleItems(date) {
+  const key = dateKeyFrom(date);
+  const day = timetableDayFromDate(date);
+  const items = [];
+  for (const course of store.primaryCourses()) {
+    for (const slot of store.courseSlots(course)) {
+      if (slot.day !== day) continue;
+      items.push({ kind: "course", title: course.title, sub: course.room, start: slot.startTime, end: slot.endTime, color: course.color || "#2563eb" });
+    }
+  }
+  for (const event of eventsForDate(key)) {
+    items.push({ kind: "event", title: event.title, sub: "", start: event.allDay ? "" : event.startTime, end: event.allDay ? "" : event.endTime, allDay: Boolean(event.allDay), color: eventColorValue(event.color), id: event.id, occ: event.occurrenceDate || event.date });
+  }
+  return items.sort((a, b) => (a.allDay ? -1 : b.allDay ? 1 : timeToMinutes(a.start) - timeToMinutes(b.start)));
+}
+
+function todayScheduleCard() {
+  const date = ui.date instanceof Date ? ui.date : new Date();
+  const isToday = dateKeyFrom(date) === todayKey();
+  const items = todayScheduleItems(date);
+  const now = new Date();
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+  const rows = items
+    .map((item) => {
+      const start = timeToMinutes(item.start);
+      const end = timeToMinutes(item.end);
+      const current = isToday && !item.allDay && nowMin >= start && nowMin < end;
+      const past = isToday && !item.allDay && nowMin >= end;
+      const kind = item.kind === "course" ? "수업" : "일정";
+      const inner = `
+        <span class="tv-time">${item.allDay ? "<b>종일</b>" : `<b>${escapeHtml(item.start)}</b><small>${escapeHtml(item.end)}</small>`}</span>
+        <span class="tv-bar" style="background:${escapeHtml(item.color)}"></span>
+        <span class="tv-sched-body"><b>${escapeHtml(item.title)}</b><small>${kind}${item.sub ? ` · ${escapeHtml(item.sub)}` : ""}</small></span>
+        ${current ? `<span class="tv-now">지금</span>` : ""}`;
+      return item.kind === "event"
+        ? `<button type="button" class="tv-sched-row ${past ? "past" : ""}" data-act="show-event" data-id="${item.id}" data-occ="${item.occ}">${inner}</button>`
+        : `<div class="tv-sched-row ${past ? "past" : ""}">${inner}</div>`;
+    })
+    .join("");
+  return `
+    <section class="tv-sched" aria-label="${isToday ? "오늘 시간표" : "이날 시간표"}">
+      <div class="tv-head"><h2>${isToday ? "오늘 시간표" : "이날 시간표"}</h2><a href="#/timetable">전체 보기</a></div>
+      <div class="tv-card">${rows || `<p class="tv-empty">수업과 일정이 없는 날이에요.</p>`}</div>
+    </section>`;
+}
+
+function todayDeadlineCard() {
   const items = store.upcomingDeadlines(7);
   if (!items.length) return "";
   const groups = store.getState().groups || [];
   return `
-    <div class="deadline-strip">
-      <span class="tt-switch-label">이번 주 마감</span>
-      <div class="tt-chip-row">
+    <section class="tv-due" aria-label="이번 주 마감">
+      <div class="tv-head"><h2>이번 주 마감</h2></div>
+      <div class="tv-card">
         ${items
           .map((task) => {
             const group = task.groupId ? groups.find((item) => item.id === task.groupId) : null;
-            const label = dueLabel(task.dueDate) || "D-day";
             const overdue = Boolean(task.dueDate && task.dueDate < todayKey());
-            return `<button type="button" class="tt-chip deadline-chip ${overdue ? "overdue" : ""}" data-act="go-deadline" data-group="${escapeHtml(task.groupId || "")}" data-id="${task.id}">
-              <span class="tt-chip-mark">${escapeHtml(label)}</span>
-              <span class="deadline-title">${escapeHtml(task.title)}</span>
-              ${group ? `<span class="deadline-group">${escapeHtml(group.name)}</span>` : ""}
+            return `<button type="button" class="tv-due-row ${overdue ? "overdue" : ""}" data-act="go-deadline" data-group="${escapeHtml(task.groupId || "")}" data-id="${task.id}">
+              <span class="tv-dday">${escapeHtml(dueLabel(task.dueDate) || "D-day")}</span>
+              <span class="tv-due-title">${escapeHtml(task.title)}</span>
+              ${group ? `<span class="team-badge">${escapeHtml(group.name)}</span>` : ""}
             </button>`;
           })
           .join("")}
       </div>
-    </div>`;
+    </section>`;
 }
 
-function todayQuickAdd(dateKey) {
-  const cats = store.getState().categories;
-  const picked = ui.addingCategory || cats[0]?.id || "school";
-  const cat = cats.find((item) => item.id === picked) || cats[0];
+function todayTaskSections(key) {
+  const tasks = store.tasksOn(key);
+  const done = tasks.filter((task) => task.status === "completed").length;
+  const sections = store
+    .getState()
+    .categories.map((cat) => {
+      const list = tasks
+        .filter((task) => task.categoryId === cat.id)
+        .sort((a, b) => Number(a.status === "completed") - Number(b.status === "completed"));
+      return `
+        <div class="tv-cat">
+          <div class="tv-cat-pill">
+            <span class="dot" style="background:${cat.color}"></span>
+            <b style="color:${cat.color}">${escapeHtml(cat.name)}</b>
+            <button type="button" class="tv-cat-add" data-act="start-add" data-cat="${cat.id}" aria-label="${escapeHtml(cat.name)}에 할 일 추가">${icon("plus", 14)}</button>
+          </div>
+          ${ui.addingCategory === cat.id ? categoryAdd(key, cat.id) : ""}
+          ${list.length ? `<div class="list">${list.map((task) => taskRow(task)).join("")}</div>` : ""}
+        </div>`;
+    })
+    .join("");
   return `
-    <form class="today-quick-add" data-act="add-task">
-      <input class="field" name="title" data-add-title placeholder="할 일 제목" required>
-      <div class="today-quick-row">
-        <select class="field" name="categoryId" aria-label="카테고리">
-          ${cats
-            .map((item) => `<option value="${item.id}" ${item.id === picked ? "selected" : ""}>${escapeHtml(item.name)}</option>`)
-            .join("")}
-        </select>
-        <input class="field" name="date" type="date" value="${dateKey}" required aria-label="날짜">
-      </div>
-      <p class="page-date">${cat ? `${escapeHtml(cat.name)}에 추가됩니다` : ""}</p>
-      <details class="composer-more" ${ui.todayExtrasOpen ? "open" : ""}>
-        <summary>중요도 · 반복 · 메모</summary>
-        <select class="field" name="priority" aria-label="중요도">
-          <option value="normal">보통</option>
-          <option value="high">높음</option>
-          <option value="low">낮음</option>
-        </select>
-        <select class="field" name="repeatFreq" aria-label="반복">
-          <option value="">반복 없음</option>
-          <option value="daily">매일</option>
-          <option value="weekly">매주</option>
-        </select>
-        <input class="field" name="note" placeholder="메모 (선택)">
-        <input class="field" name="subtask" placeholder="하위 항목 (선택, 쉼표로 구분)">
-        ${courseSelectHtml("courseId", "")}
-      </details>
-      <button class="primary" type="submit">할 일 추가</button>
-    </form>`;
+    <section class="tv-tasks" aria-label="할 일">
+      <div class="tv-head"><h2>할 일</h2><span class="tv-count">${done}/${tasks.length}</span></div>
+      ${sections}
+    </section>`;
 }
 
 function viewToday(embedded = false) {
   const key = dateKeyFrom(ui.date);
-  const strip = upcomingDeadlineStrip();
-  const tasks = store.tasksOn(key);
-  const groups = store.getState().categories.map((cat) => ({
-    cat,
-    tasks: tasks.filter((task) => task.categoryId === cat.id),
-  }));
-  const emptyHint = !tasks.length
-    ? `<div class="empty today-empty"><b>오늘 할 일이 없습니다</b><p>할 일을 추가한 뒤 집중 시작을 눌러 공부 시간을 기록할 수 있습니다</p></div>`
-    : "";
-  const list = groups
-    .map((group) => {
-      if (!group.tasks.length) {
-        return `<details class="empty-cat"><summary><span class="dot" style="background:${group.cat.color}"></span>${escapeHtml(group.cat.name)} · 없음</summary></details>`;
-      }
-      return `
-          <div class="group-title"><span class="dot" style="background:${group.cat.color}"></span>${escapeHtml(group.cat.name)}</div>
-          <div class="list">
-            ${group.tasks.map((task) => taskRow(task)).join("")}
-          </div>`;
-    })
-    .join("");
-  const composer = todayQuickAdd(key);
   if (embedded) {
-    return `${strip}<div class="embed-nav">${dateNav("today")}</div>${composer}${emptyHint}${list}`;
+    return `<div class="embed-nav">${dateNav("today")}</div>${todayTaskSections(key)}`;
   }
-  const extra = `<button class="ghost" data-act="go-categories">${icon("settings", 14)} 카테고리 관리</button>${dateNav("today")}`;
   return `
-    ${top("오늘 할 일", formatShortKoreanDate(ui.date), extra)}
-    ${strip}
-    <div class="today-split">
-      <div class="today-split-list">${composer}${emptyHint}${list}</div>
-      ${viewTodaySchedule()}
+    ${todayTopBar()}
+    <div class="today-v2">
+      <div class="tv-main">
+        ${todayWeekStrip()}
+        ${todayTaskSections(key)}
+      </div>
+      <div class="tv-side">
+        ${todayScheduleCard()}
+        ${todayDeadlineCard()}
+      </div>
     </div>`;
 }
 
@@ -1390,6 +1438,25 @@ function viewTimeline() {
     </div>`;
 }
 
+const CAL_MAX_CHIPS = 4;
+
+// 캘린더 칸 칩: 일정 → 그날 할 일(카테고리 색, 완료는 뒤로) → 그날이 마감인 할 일(점선). 앱 캘린더와 같은 규칙
+function calendarChips(key) {
+  const events = eventsForDate(key)
+    .slice()
+    .sort((a, b) => (a.allDay ? -1 : b.allDay ? 1 : timeToMinutes(a.startTime) - timeToMinutes(b.startTime)))
+    .map((event) => ({ kind: "event", title: event.title, color: eventColorValue(event.color), group: event.source === "poll", done: false }));
+  const dayTasks = store.tasksOn(key);
+  const scheduled = dayTasks
+    .filter((task) => task.scheduledDate === key)
+    .sort((a, b) => Number(a.status === "completed") - Number(b.status === "completed"))
+    .map((task) => ({ kind: "task", title: task.title, color: store.categoryById(task.categoryId)?.color || "#2563eb", group: Boolean(task.groupId), done: task.status === "completed" }));
+  const due = (store.getState().tasks || [])
+    .filter((task) => task.dueDate === key && task.scheduledDate !== key && task.status !== "completed" && (!task.groupId || assigneeNameIsMe(task.assigneeName)))
+    .map((task) => ({ kind: "due", title: task.title, color: store.categoryById(task.categoryId)?.color || "#5b6472", group: Boolean(task.groupId), done: false }));
+  return [...events, ...scheduled, ...due];
+}
+
 function viewCalendar() {
   const days = makeCalendarDays(ui.month);
   const selected = ui.date;
@@ -1409,33 +1476,17 @@ function viewCalendar() {
         .map((date) => {
           const key = formatDateKey(date);
           const out = date.getMonth() !== ui.month.getMonth();
-          const prog = store.progressOn(key);
-          const dayEvents = eventsForDate(key);
-          const deadlines = store.tasksOn(key).filter((task) => task.dueDate === key);
-          const chips = [
-            ...dayEvents.map((event) => ({
-              kind: "event",
-              title: event.title,
-              color: eventColorValue(event.color),
-              group: event.source === "poll",
-            })),
-            ...deadlines.map((task) => ({ kind: "due", title: task.title, color: "", group: Boolean(task.groupId) })),
-          ];
-          const visible = chips.slice(0, 2);
+          const chips = calendarChips(key);
+          const visible = chips.slice(0, CAL_MAX_CHIPS);
           const more = chips.length - visible.length;
           const isToday = key === todayKey();
           const isSelected = key === selectedKey;
           return `<button class="cal-cell ${out ? "out" : ""} ${isToday ? "today" : ""} ${isSelected ? "selected" : ""}" data-act="pick-day" data-key="${key}">
             <span class="cal-num">${date.getDate()}</span>
-            ${
-              prog.total
-                ? `<span class="mini-track" title="이수율 ${prog.percent}%"><span class="mini-fill" style="transform:scaleX(${prog.percent / 100})"></span></span>`
-                : ""
-            }
             ${visible
               .map(
                 (item) =>
-                  `<span class="event-chip ${item.kind === "due" ? "due-chip-cal" : ""} ${item.group ? "group-event" : ""}" ${item.color ? `style="background:${item.color}"` : ""}>${item.group ? "팀플 · " : ""}${escapeHtml(item.title)}</span>`,
+                  `<span class="event-chip cal-chip-${item.kind} ${item.done ? "done" : ""} ${item.group ? "group-event" : ""}" style="${item.kind === "due" ? `color:${item.color};border-color:${item.color}` : `background:${item.color}`}" title="${escapeHtml(item.title)}">${item.group && item.kind === "event" ? "팀플 " : ""}${escapeHtml(item.title)}</span>`,
               )
               .join("")}
             ${more > 0 ? `<span class="cal-more">+${more}</span>` : ""}
@@ -1487,26 +1538,6 @@ function normalizeTimetableDay(value) {
   if (n === 0) return 7;
   if (n >= 1 && n <= 7) return n;
   return 0;
-}
-
-function viewTodaySchedule() {
-  const date = ui.date instanceof Date ? ui.date : new Date();
-  const isToday = dateKeyFrom(date) === todayKey();
-  const title = isToday ? "오늘 시간표" : `${weekdayLabel(date)} 시간표`;
-  return `
-    <aside class="today-split-schedule">
-      <div class="today-sched-card">
-        <div class="today-sched-head">
-          <b>${escapeHtml(title)}</b>
-          <a href="#/timetable">시간표 탭에서 관리</a>
-        </div>
-        ${viewTimetableGrid(store.primaryCourses(), {
-          onlyDay: timetableDayFromDate(date),
-          now: isToday,
-          events: eventsForDate(dateKeyFrom(date)),
-        })}
-      </div>
-    </aside>`;
 }
 
 function timeToMinutes(value) {
@@ -3711,7 +3742,7 @@ function viewCategories() {
   const cats = store.getState().categories;
   const locked = new Set(["school", "work", "personal", "exercise"]);
   return `
-    ${top("카테고리", "할 일 분류")}
+    ${top("카테고리 관리", "할 일 분류", "", { back: "/today" })}
     <div class="list">
       ${cats
         .map((cat) => {
@@ -3776,6 +3807,7 @@ function viewProfile() {
   return `
     <div class="profile-page">
       <form class="profile-card" data-act="save-profile">
+        ${ui.onboarding ? "" : `<a class="icon-btn profile-back" href="#/today" aria-label="뒤로">${icon("chevronLeft")}</a>`}
         <h1 class="profile-title">${ui.onboarding ? "프로필 설정" : "프로필"}</h1>
         ${ui.onboarding ? `<p class="page-date">이름을 저장하면 오늘 할 일로 이동합니다.</p>` : ""}
         <div class="profile-avatar" data-profile-avatar>
@@ -4020,9 +4052,31 @@ function settingsPermissions() {
     <p class="page-date">권한은 브라우저 주소창 옆 자물쇠 아이콘에서 변경할 수 있습니다</p>`;
 }
 
+function receivedNotificationsHtml() {
+  const notes = store.getState().notifications || [];
+  const unread = store.unreadCount();
+  const row = (note) =>
+    `<button type="button" class="note ${note.read ? "" : "unread"} ${note.type === "update" ? "note-product" : ""}" data-act="go-notification" data-id="${note.id}" data-group="${escapeHtml(note.groupId || "")}" data-task="${escapeHtml(note.taskId || "")}" data-poll="${escapeHtml(note.pollId || "")}">
+      <b>${escapeHtml(note.title)}</b>
+      <div class="task-meta">${escapeHtml(note.body || "")}</div>
+    </button>`;
+  const work = notes.filter((note) => note.type !== "update");
+  const product = notes.filter((note) => note.type === "update");
+  const block = (label, list) => (list.length ? `<p class="bell-label">${label}</p>${list.map(row).join("")}` : "");
+  return `
+    <section class="received-notes" aria-label="받은 알림">
+      <div class="received-head">
+        <b>받은 알림${unread ? ` <span class="nav-badge">${unread}</span>` : ""}</b>
+        ${unread ? `<button type="button" class="ghost" data-act="read-all-notes">모두 읽음</button>` : ""}
+      </div>
+      ${notes.length ? `${block("업무", work)}${block("앱 안내", product)}` : `<div class="empty">아직 알림이 없습니다.</div>`}
+    </section>`;
+}
+
 function settingsNotifications() {
   const notes = store.getState().settings?.notifications || {};
   return `
+    ${receivedNotificationsHtml()}
     <label class="set-check">
       <input type="checkbox" data-act="set-notify" data-key="groupUpdates" ${notes.groupUpdates !== false ? "checked" : ""}>
       <span><b>그룹 활동 알림</b></span>
@@ -4136,7 +4190,7 @@ function viewSettings() {
   const tab = ui.settingsTab || "account";
   const tabs = [
     { id: "account", label: "계정" },
-    { id: "notifications", label: "알림" },
+    { id: "notifications", label: "알림", badge: store.unreadCount() },
     { id: "privacy", label: "개인정보" },
     { id: "permissions", label: "권한" },
     { id: "display", label: "화면" },
@@ -4155,7 +4209,7 @@ function viewSettings() {
         ${tabs
           .map(
             (item) =>
-              `<button type="button" class="${tab === item.id ? "on" : ""}" data-act="settings-tab" data-tab="${item.id}">${item.label}</button>`,
+              `<button type="button" class="${tab === item.id ? "on" : ""}" data-act="settings-tab" data-tab="${item.id}">${item.label}${item.badge ? ` <span class="nav-badge">${item.badge}</span>` : ""}</button>`,
           )
           .join("")}
       </nav>
@@ -4306,7 +4360,6 @@ function viewFocus(section) {
           <div class="desk-live" data-clock="desk">${clock(store.elapsedNow())}</div>
           <div class="desk-task">${escapeHtml(task?.title || "측정 중")}</div>
         </div>
-        <button class="night-x" data-act="open-search" aria-label="검색">${icon("search")}</button>
         <div class="tools-wrap">
           <button class="night-x" data-act="toggle-tools" aria-label="측정 중 도구">${icon("apps")}</button>
           ${
@@ -4755,7 +4808,7 @@ function moreSheetHtml(active) {
         ${moreNavItems()
           .map(
             (item) =>
-              `<a class="${active === item.name ? "on" : ""}" href="${item.href}">${icon(item.ic, 18)} ${item.label}</a>`,
+              `<a class="${navActiveName(active) === item.name ? "on" : ""}" href="${item.href}">${icon(item.ic, 18)} ${item.label}${navBadge(item)}</a>`,
           )
           .join("")}
       </div>
@@ -4763,13 +4816,14 @@ function moreSheetHtml(active) {
 }
 
 function bottomNavHtml(active) {
-  const moreOn = ui.navMore || moreNavItems().some((item) => item.name === active);
+  const moreOn = ui.navMore || moreNavItems().some((item) => item.name === navActiveName(active));
+  const unread = store.unreadCount();
   return `
     <nav class="bottom-nav">
       ${primaryNavItems()
-        .map((item) => `<a class="${active === item.name ? "active" : ""}" href="${item.href}">${icon(item.ic, 18)}<span>${item.label}</span></a>`)
+        .map((item) => `<a class="${navActiveName(active) === item.name ? "active" : ""}" href="${item.href}">${icon(item.ic, 18)}<span>${item.label}</span></a>`)
         .join("")}
-      <button type="button" class="${moreOn ? "active" : ""}" data-act="toggle-more" aria-expanded="${ui.navMore ? "true" : "false"}">${icon("menu", 18)}<span>더보기</span></button>
+      <button type="button" class="${moreOn ? "active" : ""}" data-act="toggle-more" aria-expanded="${ui.navMore ? "true" : "false"}">${icon("moreHorizontal", 18)}<span>더보기</span>${unread ? `<i class="bn-dot" aria-hidden="true"></i>` : ""}</button>
     </nav>
     ${moreSheetHtml(active)}`;
 }
@@ -6359,6 +6413,9 @@ function onClick(event) {
     const groupId = actEl.dataset.group;
     go(groupId ? groupPath(groupId, "tasks") : "/today");
     return;
+  } else if (act === "week-shift") {
+    ui.date = addDays(ui.date, 7 * (Number(actEl.dataset.dir) || 1));
+    maybeMaterializeToday();
   } else if (act === "go-categories") {
     go("/categories");
     return;
@@ -7178,6 +7235,7 @@ function onClick(event) {
     go(route);
     return;
   } else if (act === "bell") ui.panel = !ui.panel;
+  else if (act === "read-all-notes") store.markNotificationsRead();
   else if (act === "open-note" || act === "go-notification") {
     store.markNotificationsRead();
     ui.panel = false;

@@ -3,7 +3,9 @@
   --bg-base: #f6f7f9;
   --rail: #eceef2;
   --rail-base: #eceef2;
-  --paper: #ffffff;
+  /* 카드·행·입력칸·바 = 화면 배경과 같은 색 (앱·Figma color/background와 통일) */
+  --surface: #ffffff;
+  --paper: var(--bg);
   --ink: #111827;
   --muted: #5b6472;
   --line: #e5e7eb;
@@ -35,7 +37,8 @@
     --bg-base: #14161a;
     --rail: #20242c;
     --rail-base: #20242c;
-    --paper: #1c1f26;
+    --surface: #1c1f26;
+    --paper: var(--bg);
     --ink: #f1f3f6;
     --muted: #9aa3b2;
     --line: #2a2e37;
@@ -60,7 +63,8 @@
   --bg-base: #14161a;
   --rail: #20242c;
   --rail-base: #20242c;
-  --paper: #1c1f26;
+  --surface: #1c1f26;
+  --paper: var(--bg);
   --ink: #f1f3f6;
   --muted: #9aa3b2;
   --line: #2a2e37;
@@ -1211,7 +1215,7 @@ textarea.field { min-height: 88px; resize: vertical; }
   z-index: 31;
   max-width: 220px;
   padding: 8px 10px;
-  background: var(--paper);
+  background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
@@ -1227,7 +1231,7 @@ textarea.field { min-height: 88px; resize: vertical; }
   right: 0;
   top: calc(100% + 4px);
   min-width: 168px;
-  background: var(--paper);
+  background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 6px;
@@ -1593,7 +1597,7 @@ textarea.field { min-height: 88px; resize: vertical; }
   right: 0;
   top: calc(100% + 4px);
   min-width: 148px;
-  background: var(--paper);
+  background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 6px;
@@ -1890,7 +1894,7 @@ textarea.field { min-height: 88px; resize: vertical; }
   right: 0;
   top: calc(100% + 4px);
   min-width: 132px;
-  background: var(--paper);
+  background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 6px;
@@ -2283,7 +2287,7 @@ textarea.field { min-height: 88px; resize: vertical; }
   top: calc(100% + 6px);
   width: min(320px, calc(100vw - 24px));
   padding: 8px;
-  background: var(--paper);
+  background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
@@ -3332,7 +3336,7 @@ button.folder-crumb:hover { background: var(--hover); color: var(--ink); }
 }
 .modal {
   width: min(440px, 100%);
-  background: var(--paper);
+  background: var(--surface);
   border-radius: 12px;
   padding: 22px;
   box-shadow: var(--shadow);
@@ -3434,7 +3438,7 @@ button.folder-crumb:hover { background: var(--hover); color: var(--ink); }
 .auth-gate > .auth-gate-card { width: min(400px, 100%); }
 .auth-gate-card {
   width: 100%;
-  background: var(--paper);
+  background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 12px;
   padding: 28px 22px 22px;
@@ -3549,7 +3553,7 @@ button.folder-crumb:hover { background: var(--hover); color: var(--ink); }
   right: 0;
   top: 42px;
   width: min(360px, calc(100vw - 32px));
-  background: var(--paper);
+  background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
@@ -3851,4 +3855,125 @@ button.folder-crumb:hover { background: var(--hover); color: var(--ink); }
 
 @media (max-width: 860px) {
   .group-link-form { grid-template-columns: 1fr; }
+}
+
+
+/* ---- 앱과 맞춘 메뉴 (2026-10) ---- */
+.nav-sep { height: 1px; margin: 8px 10px; background: var(--line); }
+.nav-badge {
+  display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; margin-left: auto;
+  border-radius: 999px; background: var(--danger); color: #fff; font-size: 11px; font-weight: 700; line-height: 1;
+}
+.settings-nav .nav-badge, .received-head .nav-badge { margin-left: 4px; }
+.bottom-nav button { position: relative; }
+.bn-dot { position: absolute; top: 2px; left: calc(50% + 8px); width: 7px; height: 7px; border-radius: 50%; background: var(--danger); }
+.topbar-title-back { display: flex; align-items: flex-start; gap: 10px; }
+.top-back { display: inline-grid; place-items: center; height: 36px; margin-top: 2px; }
+.profile-card { position: relative; }
+.profile-back { position: absolute; top: 16px; left: 16px; display: inline-grid; place-items: center; height: 36px; }
+.check { background: var(--surface); }
+.received-notes { display: grid; gap: 6px; margin-bottom: 20px; }
+.received-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+.received-notes .note { text-align: left; }
+.received-notes .note.unread b::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--accent); vertical-align: middle; }
+
+/* ---- 오늘 할 일 (앱과 같은 구성) ---- */
+.today-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.today-top-btn {
+  display: inline-grid; place-items: center; width: 40px; height: 40px; padding: 0; overflow: hidden;
+  border-radius: 50%; border: 0; background: var(--paper); color: var(--ink); cursor: pointer;
+}
+.today-top-btn:hover { background: var(--hover); }
+.today-top-btn img { width: 100%; height: 100%; object-fit: cover; }
+.today-v2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 360px); gap: 24px; align-items: start; }
+.tv-main, .tv-side { display: grid; gap: 20px; min-width: 0; }
+.tv-side { position: sticky; top: 20px; }
+.tv-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.tv-head h2 { margin: 0; font-size: 18px; font-weight: 800; letter-spacing: -0.2px; }
+.tv-head a { color: var(--accent); font-size: 13px; font-weight: 700; }
+.tv-count { color: var(--muted); font-size: 13px; font-weight: 700; }
+.tv-card { background: var(--paper); border-radius: 16px; padding: 4px 12px; }
+
+.tv-week { background: var(--paper); border-radius: 16px; padding: 14px 8px 8px; }
+.tv-week-top { display: flex; align-items: center; justify-content: space-between; padding: 0 8px; margin-bottom: 8px; }
+.tv-week-top b { font-size: 16px; }
+.tv-week-nav { display: flex; align-items: center; gap: 6px; }
+.tv-today-pill { height: 30px; padding: 0 12px; border: 0; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-weight: 700; font-size: 13px; }
+.tv-arrow { display: inline-grid; place-items: center; width: 30px; height: 30px; padding: 0; border-radius: 50%; border: 1px solid var(--line); background: transparent; color: var(--ink); }
+.tv-week-row { display: grid; grid-template-columns: repeat(7, 1fr); }
+.tv-day { display: grid; justify-items: center; gap: 6px; padding: 4px 0; border: 0; background: transparent; color: var(--ink); cursor: pointer; }
+.tv-day-label { color: var(--muted); font-size: 12px; font-weight: 600; }
+.tv-day.sat .tv-day-label { color: var(--accent); }
+.tv-day.sun .tv-day-label { color: var(--danger); }
+.tv-blob { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 12px; background: var(--rail); color: var(--accent); font-size: 13px; font-weight: 800; }
+.tv-blob.has { background: var(--accent-soft); }
+.tv-blob.done { background: var(--accent); color: #fff; }
+.tv-date { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; font-size: 14px; font-weight: 600; }
+.tv-day.today .tv-date { color: var(--accent); }
+.tv-day.sel .tv-date { background: var(--ink); color: var(--bg); font-weight: 800; }
+
+.tv-sched-row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 0; border: 0; background: transparent; color: inherit; text-align: left; }
+.tv-sched-row + .tv-sched-row { border-top: 1px solid var(--line); }
+.tv-sched-row.past { opacity: 0.45; }
+button.tv-sched-row { cursor: pointer; }
+.tv-time { display: grid; width: 44px; flex: none; }
+.tv-time b { font-size: 13px; }
+.tv-time small { color: var(--muted); font-size: 11px; }
+.tv-bar { width: 4px; align-self: stretch; min-height: 36px; border-radius: 2px; flex: none; }
+.tv-sched-body { display: grid; min-width: 0; flex: 1; }
+.tv-sched-body b { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tv-sched-body small { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tv-now { flex: none; padding: 3px 8px; border-radius: 999px; background: var(--danger); color: #fff; font-size: 11px; font-weight: 800; }
+.tv-empty { margin: 0; padding: 16px 0; color: var(--muted); font-size: 13px; text-align: center; }
+
+.tv-cat { display: grid; gap: 8px; margin-bottom: 12px; }
+.tv-cat-pill { display: inline-flex; align-items: center; gap: 8px; justify-self: start; height: 40px; padding: 0 4px 0 14px; border-radius: 20px; background: var(--rail); }
+.tv-cat-pill b { font-size: 15px; font-weight: 800; }
+.tv-cat-add { display: inline-grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 50%; background: var(--surface); color: var(--ink); cursor: pointer; }
+.tv-cat .list { border-radius: 12px; }
+
+.tv-due-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.tv-due-row + .tv-due-row { border-top: 1px solid var(--line); }
+.tv-dday { flex: none; min-width: 44px; padding: 2px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 800; text-align: center; }
+.tv-due-row.overdue .tv-dday { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }
+.tv-due-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 600; }
+
+@media (max-width: 860px) {
+  /* 모바일: 앱과 같은 순서 — 주간 → 오늘 시간표 → 할 일 → 이번 주 마감 */
+  .today-v2 { display: flex; flex-direction: column; gap: 20px; }
+  .tv-main, .tv-side { display: contents; }
+  .tv-week { order: 1; }
+  .tv-sched { order: 2; }
+  .tv-tasks { order: 3; }
+  .tv-due { order: 4; }
+}
+
+/* ---- 캘린더: 칸마다 할 일 칩 (앱과 같은 규칙) ---- */
+.cal-cell { min-height: 118px; gap: 3px; padding: 6px 4px; }
+.cal-cell .cal-num { margin-bottom: 2px; }
+.cal-cell.selected { outline: 0; background: var(--accent-soft); }
+.cal-cell.today .cal-num { background: var(--danger); color: #fff; }
+.cal-grid > :nth-child(7n + 1):not(.out) .cal-num, .cal-grid > .cal-head:nth-child(7n + 1) { color: var(--danger); }
+.cal-grid > :nth-child(7n):not(.out) .cal-num, .cal-grid > .cal-head:nth-child(7n) { color: var(--accent); }
+.cal-cell.today .cal-num { color: #fff !important; }
+.event-chip { display: block; width: 100%; height: 18px; line-height: 14px; padding: 2px 4px; font-size: 11px; font-weight: 600; letter-spacing: -0.3px; border-radius: 4px; flex: none; }
+.event-chip.cal-chip-due { background: var(--surface); border: 1px dashed; line-height: 12px; }
+.event-chip.done { opacity: 0.4; text-decoration: line-through; }
+@media (max-width: 860px) {
+  .cal-grid { margin-left: -16px; margin-right: -16px; border-radius: 0; border-left: 0; border-right: 0; }
+  .cal-cell { min-height: 112px; padding: 4px 1px; }
+  .event-chip { font-size: 10px; padding: 2px 2px; text-overflow: clip; }
+  .cal-cell .cal-num { align-self: center; }
+}
+.cal-grid { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+.cal-cell { min-width: 0; overflow: hidden; }
+
+/* ---- 시간표: 모바일에서도 월~금이 가로 스크롤 없이 한 화면에 (앱과 동일) ---- */
+@media (max-width: 860px) {
+  .tt-wrap { --tt-gutter: 26px !important; }
+  .tt-days,
+  .tt-grid { min-width: 0; }
+  .tt-days { grid-template-columns: var(--tt-gutter, 26px) repeat(var(--tt-days, 5), minmax(0, 1fr)); }
+  .tt-block { padding: 4px 3px 4px 6px; }
+  .tt-name { font-size: 11px; line-height: 1.3; white-space: normal; overflow-wrap: anywhere; }
 }
