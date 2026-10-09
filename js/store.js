@@ -395,6 +395,22 @@ function pruneOrphanTasks(tasks, groups) {
     .filter((task) => task && (!task.groupId || ids.has(task.groupId)));
 }
 
+function pruneOrphanPages(projects, groups) {
+  const ids = new Set((groups || []).map((group) => group.id));
+  return (Array.isArray(projects) ? projects : []).filter((page) => !page.groupId || ids.has(page.groupId));
+}
+
+function mergeLocalFileUris(remoteBlocks, localBlocks) {
+  const localById = new Map((Array.isArray(localBlocks) ? localBlocks : []).map((block) => [block.id, block]));
+  return (Array.isArray(remoteBlocks) ? remoteBlocks : []).map((block) => {
+    const local = localById.get(block?.id);
+    if (!local) return block;
+    const next = { ...block };
+    if (local.uri && !next.uri) next.uri = local.uri;
+    return next;
+  });
+}
+
 function seriesKey(task) {
   return task.repeat?.seriesId || task.id;
 }
@@ -587,6 +603,20 @@ const listeners = new Set();
 let persistTimer = 0;
 let remoteSave = null;
 
+function personalProjects(projects) {
+  return (Array.isArray(projects) ? projects : []).filter((page) => !page.groupId);
+}
+
+function personalTasks(tasks) {
+  return (Array.isArray(tasks) ? tasks : []).filter((task) => !task.groupId);
+}
+
+function personalEvents(events) {
+  return (Array.isArray(events) ? events : []).filter(
+    (event) => event && event.source !== "poll" && !String(event.id || "").startsWith("gevent-"),
+  );
+}
+
 function persistNow() {
   clearTimeout(persistTimer);
   persistTimer = 0;
@@ -595,12 +625,21 @@ function persistNow() {
   const payload = {
     ...clean,
     ...migrateTimetableState(state),
+    projects: personalProjects(state.projects),
+    tasks: personalTasks(state.tasks),
+    events: personalEvents(state.events),
     groups: [],
     currentMemberId: activeUserId,
     settings: mergeSettings(defaultSettings(), state.settings),
     notifications: migrateNotifications(state.notifications),
   };
-  const localPayload = { ...payload, groups: Array.isArray(state.groups) ? state.groups : [] };
+  const localPayload = {
+    ...payload,
+    groups: Array.isArray(state.groups) ? state.groups : [],
+    projects: state.projects,
+    tasks: state.tasks,
+    events: personalEvents(state.events),
+  };
   writeAnnotationSidecar(state.projects);
   const key = storageKey();
   try {
@@ -651,6 +690,7 @@ export function setGroups(groups) {
     ...state,
     groups: list,
     tasks: pruneOrphanTasks(state.tasks, list),
+    projects: pruneOrphanPages(state.projects, list),
   };
   emit();
 }
@@ -717,15 +757,20 @@ export function exportBackupPayload() {
     app: "focusuniv",
     version: 1,
     categories: rest.categories || [],
-    tasks: rest.tasks || [],
-    events: rest.events || [],
+    tasks: personalTasks(rest.tasks),
+    events: personalEvents(rest.events),
     timetables: rest.timetables || [],
     primaryTimetableId: rest.primaryTimetableId || "",
     coursePresetColors: rest.coursePresetColors || [],
     customThemePresets: rest.customThemePresets || [],
     gradeRecords: rest.gradeRecords || [],
-    projects: rest.projects || [],
-    groups: rest.groups || [],
+    projects: personalProjects(rest.projects),
+    groups: (rest.groups || []).map((group) => ({
+      id: group.id,
+      name: group.name,
+      inviteCode: group.inviteCode,
+      memberIds: group.memberIds,
+    })),
     members: rest.members || [],
     profile,
     settings,
@@ -788,9 +833,19 @@ export function replaceState(next) {
     coursePresetColors: normalizeCoursePresetColors(incoming.coursePresetColors ?? state.coursePresetColors),
     customThemePresets: normalizeCustomThemePresets(incoming.customThemePresets ?? state.customThemePresets),
     projects: applyAnnotationSidecar(
-      mergePdfProjectFields(migrateProjects(incoming.projects ?? state.projects), state.projects),
+      mergePdfProjectFields(
+        migrateProjects([
+          ...personalProjects(incoming.projects ?? state.projects),
+          ...state.projects.filter((page) => page.groupId),
+        ]),
+        state.projects,
+      ),
     ),
-    tasks: pruneOrphanTasks(incoming.tasks ?? state.tasks, incoming.groups ?? state.groups),
+    tasks: pruneOrphanTasks(
+      [...personalTasks(incoming.tasks ?? state.tasks), ...state.tasks.filter((task) => task.groupId)],
+      incoming.groups ?? state.groups,
+    ),
+    events: personalEvents(incoming.events ?? state.events),
     notifications: migrateNotifications(incoming.notifications ?? state.notifications),
     seenAssignedTaskIds: Array.isArray(incoming.seenAssignedTaskIds)
       ? incoming.seenAssignedTaskIds.filter(Boolean).slice(-200)
@@ -864,6 +919,7 @@ function taskFromRemoteGroup(input) {
     assigneeName: String(input.assigneeName || "").trim(),
     createdBy: String(input.createdBy || "").trim(),
     createdByName: String(input.createdByName || "").trim(),
+    assignmentGroupId: String(input.assignmentGroupId || "").trim() || undefined,
     scheduledDate: isDateKey(input.dueDate) ? input.dueDate : formatDateKey(new Date()),
     status: input.status === "completed" ? "completed" : "todo",
     focusedSeconds: 0,
@@ -880,6 +936,80 @@ export function applyRemoteGroupTasks(list) {
   const personal = state.tasks.filter((task) => !task.groupId);
   state = { ...state, tasks: [...personal, ...incoming.map(taskFromRemoteGroup)] };
   emit();
+}
+
+function pageFromRemoteGroup(input, local) {
+  const tabs = Array.isArray(input.tabs)
+    ? input.tabs.map((tab) => ({
+        ...tab,
+        blocks: mergeLocalFileUris(tab.blocks, local?.tabs?.find((item) => item.id === tab.id)?.blocks),
+      }))
+    : local?.tabs || [];
+  return {
+    id: String(input.id),
+    groupId: String(input.groupId),
+    parentId: input.parentId || null,
+    name: String(input.name || "페이지"),
+    type: input.type === "folder" || input.type === "pdf" ? input.type : "page",
+    color: input.color || "#2563eb",
+    icon: input.icon || (input.type === "folder" ? "F" : input.type === "pdf" ? "P" : "N"),
+    tabs,
+    activeTabId: input.activeTabId || tabs[0]?.id || "",
+    blocks: mergeLocalFileUris(input.blocks, local?.blocks),
+    pdfName: input.pdfName || "",
+    pdfSize: Number(input.pdfSize) || 0,
+    pdfPage: Math.max(1, Number(input.pdfPage) || 1),
+    pdfNotes: input.pdfNotes || "",
+    pdfAnnotations: input.pdfAnnotations && typeof input.pdfAnnotations === "object" ? input.pdfAnnotations : {},
+    pdfUri: local?.pdfUri || "",
+    pdfFileShared: false,
+    revision: Number(input.revision) || 1,
+    updatedBy: input.updatedBy || "",
+    updatedByName: input.updatedByName || "",
+    createdBy: input.createdBy || "",
+    createdAt: input.createdAt,
+    updatedAt: input.updatedAt,
+    courseLabel: String(input.courseLabel || "").trim() || undefined,
+  };
+}
+
+export function applyRemoteGroupPages(list, { keepIds } = {}) {
+  const incoming = (Array.isArray(list) ? list : []).filter((item) => item?.id && item.groupId);
+  const keep = new Set(keepIds || []);
+  const personal = state.projects.filter((page) => !page.groupId);
+  const localById = new Map(state.projects.filter((page) => page.groupId).map((page) => [page.id, page]));
+  const stale = [];
+  const merged = incoming
+    .filter((page) => {
+      const local = localById.get(page.id);
+      if (local && keep.has(page.id) && Number(page.revision) > Number(local.revision || 0)) {
+        stale.push(page);
+        return false;
+      }
+      return !keep.has(page.id);
+    })
+    .map((page) => pageFromRemoteGroup(page, localById.get(page.id)));
+  const kept = state.projects.filter((page) => page.groupId && keep.has(page.id));
+  state = {
+    ...state,
+    projects: migrateProjects([...personal, ...merged, ...kept]),
+  };
+  emit();
+  return stale;
+}
+
+export function applyServerPage(page) {
+  if (!page?.id) return;
+  const local = projectById(page.id);
+  const next = page.groupId ? pageFromRemoteGroup(page, local) : { ...local, ...page };
+  state = {
+    ...state,
+    projects: state.projects.some((item) => item.id === page.id)
+      ? state.projects.map((item) => (item.id === page.id ? { ...item, ...next } : item))
+      : [...state.projects, next],
+  };
+  emit();
+  return projectById(page.id);
 }
 
 export function projectsInGroup(groupId) {
@@ -1020,12 +1150,13 @@ export function globalSearch(query) {
     hits.push({
       type: "group",
       id: group.id,
-      label: group.name || "그룹",
+      label: group.name || "팀플",
       meta: `${(group.memberIds || []).length}명`,
       route: `/groups/${group.id}`,
     });
   }
   for (const page of state.projects || []) {
+    if (page.groupId && !isGroupMember(page.groupId)) continue;
     if (!noteMatches(page, q)) continue;
     const group = page.groupId ? (state.groups || []).find((item) => item.id === page.groupId) : null;
     hits.push({
@@ -1080,7 +1211,7 @@ function localSelfNames() {
 function notificationDuplicate(note) {
   return state.notifications.some((item) => {
     if (item.type !== note.type) return false;
-    if (note.pollId) return item.pollId === note.pollId;
+    if (note.pollId) return item.pollId === note.pollId && item.type === note.type;
     if (note.taskId) return item.taskId === note.taskId;
     if (note.type === "group-join") return item.groupId === note.groupId && item.body === note.body;
     return false;
@@ -1142,7 +1273,10 @@ export function takeNewGroupTaskIds(ids) {
 
 export function pushNotification(input = {}) {
   const type = String(input.type || "info");
-  if ((type === "group-join" || type === "task-assign" || type === "task-add") && state.settings?.notifications?.groupUpdates === false) {
+  if (
+    ["group-join", "task-assign", "task-add", "poll-due", "poll-confirm", "poll-change", "poll-cancel"].includes(type) &&
+    state.settings?.notifications?.groupUpdates === false
+  ) {
     return null;
   }
   const note = {
@@ -1201,6 +1335,8 @@ export function addTask(input) {
     projectId: input.projectId || undefined,
     groupId: input.groupId || undefined,
     assigneeName: String(input.assigneeName || "").trim(),
+    assignmentGroupId: String(input.assignmentGroupId || "").trim() || undefined,
+    courseId: input.courseId || undefined,
     scheduledDate: input.scheduledDate,
     status: "todo",
     focusedSeconds: 0,
@@ -1322,36 +1458,180 @@ export function updateCategory(id, changes) {
   emit();
 }
 
-export function addEvent(input) {
-  const event = { id: uid("event"), ...input };
-  state = { ...state, events: [...state.events, event] };
-  emit();
+function normalizeEventRepeat(value) {
+  if (!value || typeof value !== "object") return null;
+  const freq = value.freq === "weekly" || value.freq === "biweekly" || value.freq === "monthly" ? value.freq : "";
+  if (!freq) return null;
+  return {
+    freq,
+    until: isDateKey(value.until) ? value.until : null,
+    seriesId: String(value.seriesId || "").trim() || undefined,
+  };
 }
 
-export function updateEvent(id, patch = {}) {
-  const key = String(id || "");
-  if (!key) return;
-  const next = {};
+function eventMatchesRepeat(anchor, dateKey, freq) {
+  if (!isDateKey(anchor) || !isDateKey(dateKey) || dateKey < anchor) return false;
+  const start = parseDateKey(anchor);
+  const current = parseDateKey(dateKey);
+  const days = Math.round((current - start) / 86400000);
+  if (freq === "weekly") return days % 7 === 0;
+  if (freq === "biweekly") return days % 14 === 0;
+  if (freq === "monthly") return start.getDate() === current.getDate();
+  return false;
+}
+
+function eventOccursOn(event, dateKey) {
+  if (!event || event.source === "poll") return false;
+  if ((event.exceptions || []).includes(dateKey)) return false;
+  if (event.date === dateKey) return true;
+  const repeat = event.repeat;
+  if (!repeat?.freq) return false;
+  if (repeat.until && dateKey > repeat.until) return false;
+  return eventMatchesRepeat(event.date, dateKey, repeat.freq);
+}
+
+function previousOccurrence(event, dateKey) {
+  let cursor = formatDateKey(addDays(parseDateKey(dateKey), -1));
+  for (let i = 0; i < 400 && cursor >= event.date; i += 1) {
+    if (eventOccursOn({ ...event, exceptions: [] }, cursor)) return cursor;
+    cursor = formatDateKey(addDays(parseDateKey(cursor), -1));
+  }
+  return null;
+}
+
+export function addEvent(input) {
+  const repeat = normalizeEventRepeat(input.repeat);
+  const event = {
+    id: uid("event"),
+    title: String(input.title || "").trim(),
+    date: String(input.date || ""),
+    startTime: input.allDay ? "" : String(input.startTime || "09:00"),
+    endTime: input.allDay ? "" : String(input.endTime || "10:00"),
+    color: String(input.color || "#2563eb"),
+    allDay: Boolean(input.allDay),
+    repeat: repeat ? { ...repeat, seriesId: repeat.seriesId || uid("series") } : null,
+    exceptions: [],
+    courseId: input.courseId || undefined,
+  };
+  state = { ...state, events: [...state.events, event] };
+  emit();
+  return event;
+}
+
+function patchEventFields(event, patch = {}) {
+  const next = { ...event };
   if (patch.title != null) next.title = String(patch.title || "").trim();
   if (patch.date != null) next.date = String(patch.date || "");
   if (patch.startTime != null) next.startTime = String(patch.startTime || "09:00");
   if (patch.endTime != null) next.endTime = String(patch.endTime || "10:00");
   if (patch.color != null) next.color = String(patch.color || "#2563eb");
-  state = {
-    ...state,
-    events: state.events.map((item) => (item.id === key ? { ...item, ...next } : item)),
-  };
-  emit();
+  if ("allDay" in patch) {
+    next.allDay = Boolean(patch.allDay);
+    if (next.allDay) {
+      next.startTime = "";
+      next.endTime = "";
+    }
+  }
+  if ("repeat" in patch) {
+    const repeat = normalizeEventRepeat(patch.repeat);
+    next.repeat = repeat ? { ...repeat, seriesId: repeat.seriesId || event.repeat?.seriesId || uid("series") } : null;
+  }
+  if ("courseId" in patch) next.courseId = patch.courseId || undefined;
+  if (Array.isArray(patch.exceptions)) next.exceptions = patch.exceptions.filter(isDateKey);
+  return next;
 }
 
-export function deleteEvent(id) {
-  state = { ...state, events: state.events.filter((item) => item.id !== id) };
-  emit();
+export function updateEvent(id, patch = {}, scope = "all", occurrenceDate = "") {
+  const key = String(id || "");
+  if (!key) return;
+  const event = (state.events || []).find((item) => item.id === key);
+  if (!event) return;
+  const occ = isDateKey(occurrenceDate) ? occurrenceDate : event.date;
+  if (!event.repeat?.freq || scope === "all") {
+    state = {
+      ...state,
+      events: state.events.map((item) => (item.id === key ? patchEventFields(item, patch) : item)),
+    };
+    emit();
+    return;
+  }
+  if (scope === "this") {
+    const standalone = patchEventFields(
+      { ...event, id: uid("event"), date: occ, repeat: null, exceptions: [] },
+      { ...patch, date: occ, repeat: null },
+    );
+    state = {
+      ...state,
+      events: [
+        ...state.events.map((item) =>
+          item.id === key ? { ...item, exceptions: [...new Set([...(item.exceptions || []), occ])] } : item,
+        ),
+        standalone,
+      ],
+    };
+    emit();
+    return;
+  }
+  if (scope === "future") {
+    const prev = previousOccurrence(event, occ);
+    const nextSeries = patchEventFields(
+      { ...event, id: uid("event"), date: occ, exceptions: (event.exceptions || []).filter((day) => day >= occ) },
+      { ...patch, date: occ },
+    );
+    if (nextSeries.repeat) nextSeries.repeat = { ...nextSeries.repeat, seriesId: uid("series") };
+    state = {
+      ...state,
+      events: [
+        ...state.events.map((item) =>
+          item.id === key ? { ...item, repeat: item.repeat ? { ...item.repeat, until: prev || item.date } : null } : item,
+        ),
+        nextSeries,
+      ],
+    };
+    emit();
+  }
+}
+
+export function deleteEvent(id, scope = "all", occurrenceDate = "") {
+  const key = String(id || "");
+  const event = (state.events || []).find((item) => item.id === key);
+  if (!event) return;
+  const occ = isDateKey(occurrenceDate) ? occurrenceDate : event.date;
+  if (!event.repeat?.freq || scope === "all") {
+    state = { ...state, events: state.events.filter((item) => item.id !== key) };
+    emit();
+    return;
+  }
+  if (scope === "this") {
+    state = {
+      ...state,
+      events: state.events.map((item) =>
+        item.id === key ? { ...item, exceptions: [...new Set([...(item.exceptions || []), occ])] } : item,
+      ),
+    };
+    emit();
+    return;
+  }
+  if (scope === "future") {
+    const prev = previousOccurrence(event, occ);
+    state = {
+      ...state,
+      events:
+        !prev || occ === event.date
+          ? state.events.filter((item) => item.id !== key)
+          : state.events.map((item) =>
+              item.id === key ? { ...item, repeat: { ...item.repeat, until: prev } } : item,
+            ),
+    };
+    emit();
+  }
 }
 
 export function eventsOn(dateKey) {
   const key = String(dateKey || "");
-  return (state.events || []).filter((event) => event.date === key);
+  return (state.events || [])
+    .filter((event) => eventOccursOn(event, key))
+    .map((event) => ({ ...event, occurrenceDate: key }));
 }
 
 export function addCourse(input, timetableId) {
@@ -1431,6 +1711,10 @@ export function courseById(id) {
     if (course) return course;
   }
   return null;
+}
+
+export function allCourses() {
+  return (state.timetables || []).flatMap((item) => item.courses || []);
 }
 
 export function timetableIdForCourse(id) {
@@ -1697,6 +1981,14 @@ export function deleteSession(id) {
   emit();
 }
 
+// app.js가 팀플 페이지 서버 저장을 붙이는 지점. (ES 모듈 네임스페이스는 읽기 전용이라
+// store.updatePage = ... 로 덮어쓰면 로드 시 TypeError가 나서 훅으로 바꿈, 2026-09-28)
+const pageHooks = { afterUpdate: null, afterAdd: null, afterDelete: null };
+
+export function setPageHooks(hooks = {}) {
+  Object.assign(pageHooks, hooks);
+}
+
 export function addPage({
   name,
   parentId = null,
@@ -1708,6 +2000,8 @@ export function addPage({
   pdfName = "",
   pdfSize = 0,
   pdfPage = 1,
+  courseId,
+  courseLabel,
 } = {}) {
   const kind = type === "folder" ? "folder" : type === "pdf" ? "pdf" : "page";
   const tabId = uid("tab");
@@ -1716,6 +2010,8 @@ export function addPage({
     id: uid("page"),
     parentId,
     groupId: groupId || undefined,
+    courseId: courseId || undefined,
+    courseLabel: String(courseLabel || "").trim() || undefined,
     name:
       String(name || "").trim() ||
       (kind === "folder" ? "새로운 폴더" : kind === "pdf" ? "PDF" : "새로운 페이지"),
@@ -1740,6 +2036,7 @@ export function addPage({
   }
   state = { ...state, projects: [...state.projects, page] };
   emit();
+  pageHooks.afterAdd?.(page);
   return page;
 }
 
@@ -1751,6 +2048,7 @@ export function updatePage(id, changes) {
     ),
   };
   emit();
+  pageHooks.afterUpdate?.(id, changes);
 }
 
 export function activeTab(page) {
@@ -1836,6 +2134,7 @@ export function setBlocks(pageId, blocks) {
 }
 
 export function deletePage(id) {
+  const target = state.projects.find((page) => page.id === id) || null;
   const ids = new Set([id]);
   let grew = true;
   while (grew) {
@@ -1849,6 +2148,7 @@ export function deletePage(id) {
   }
   state = { ...state, projects: state.projects.filter((page) => !ids.has(page.id)) };
   emit();
+  pageHooks.afterDelete?.(target);
 }
 
 export function createGroup(name) {
@@ -1885,6 +2185,7 @@ export function leaveGroup(groupId) {
     ...state,
     groups: state.groups.filter((group) => group.id !== groupId),
     tasks: state.tasks.filter((task) => task.groupId !== groupId),
+    projects: state.projects.filter((page) => page.groupId !== groupId),
   };
   emit();
 }

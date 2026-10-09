@@ -9,6 +9,7 @@
     "db:migrate": "netlify database migrations apply"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.124.0",
     "@netlify/database": "^2.0.0",
     "@netlify/functions": "^4.2.5",
     "@netlify/identity": "^0.3.0",

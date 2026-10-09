@@ -1,7 +1,7 @@
 import type { Config, Context } from "@netlify/functions";
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "../../db/index.ts";
-import { groupTasks, groups, meetingPolls, pollResponses, profiles } from "../../db/schema.ts";
+import { groupPages, groupTasks, groups, meetingPolls, pollResponses, profiles } from "../../db/schema.ts";
 import { json, requireUser } from "./_shared/auth.ts";
 
 const MAX_MEMBERS = 8;
@@ -41,6 +41,91 @@ function cleanPollSlots(value: unknown) {
   return [...new Set(list)].slice(0, 400);
 }
 
+function displayName(user: { email?: string | null }, nickname?: string | null) {
+  return String(nickname || "").trim() || String(user.email || "").split("@")[0] || "멤버";
+}
+
+function stripHeavyUri(value: unknown) {
+  const uri = String(value || "");
+  if (!uri) return "";
+  if (uri.startsWith("data:") && uri.length > 12000) return "";
+  return uri;
+}
+
+function sanitizeBlocks(blocks: unknown): unknown[] {
+  if (!Array.isArray(blocks)) return [];
+  return blocks.slice(0, 400).map((block) => {
+    if (!block || typeof block !== "object") return block;
+    const next = { ...(block as Record<string, unknown>) };
+    if (typeof next.uri === "string") next.uri = stripHeavyUri(next.uri);
+    return next;
+  });
+}
+
+function sanitizeLinkUrl(value: unknown): string {
+  const raw = String(value || "").trim().slice(0, 2000);
+  if (!raw) return "";
+  try {
+    const url = new URL(raw);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.href : "";
+  } catch {
+    return "";
+  }
+}
+
+function sanitizePagePayload(input: Record<string, unknown>, type: string) {
+  if (type === "link") {
+    // 팀플 링크: 외부 문서 주소만 저장한다 (본문·파일 없음).
+    return { url: sanitizeLinkUrl(input.url), note: String(input.note || "").slice(0, 300) };
+  }
+  const tabs = Array.isArray(input.tabs)
+    ? input.tabs.slice(0, 20).map((tab) => {
+        const row = tab && typeof tab === "object" ? (tab as Record<string, unknown>) : {};
+        return {
+          id: String(row.id || ""),
+          name: String(row.name || "탭"),
+          blocks: sanitizeBlocks(row.blocks),
+        };
+      })
+    : [];
+  const payload: Record<string, unknown> = {
+    tabs,
+    activeTabId: String(input.activeTabId || tabs[0]?.id || ""),
+    blocks: sanitizeBlocks(input.blocks),
+  };
+  if (type === "pdf") {
+    payload.pdfName = String(input.pdfName || "");
+    payload.pdfSize = Math.max(0, Number(input.pdfSize) || 0);
+    payload.pdfPage = Math.max(1, Number(input.pdfPage) || 1);
+    payload.pdfNotes = String(input.pdfNotes || "").slice(0, 8000);
+    payload.pdfAnnotations = input.pdfAnnotations && typeof input.pdfAnnotations === "object" ? input.pdfAnnotations : {};
+    payload.pdfFileShared = false;
+  }
+  return payload;
+}
+
+function pageToClient(row: typeof groupPages.$inferSelect) {
+  const payload = row.payload && typeof row.payload === "object" ? (row.payload as Record<string, unknown>) : {};
+  return {
+    id: row.id,
+    groupId: row.groupId,
+    parentId: row.parentId || null,
+    name: row.name,
+    type: row.type,
+    color: row.color || "#2563eb",
+    icon: row.icon || (row.type === "folder" ? "F" : row.type === "pdf" ? "P" : row.type === "link" ? "L" : "N"),
+    revision: row.revision,
+    updatedBy: row.updatedBy,
+    updatedByName: row.updatedByName,
+    createdBy: row.createdBy,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    ...payload,
+    pdfUri: "",
+    pdfFileShared: row.type === "pdf" ? false : undefined,
+  };
+}
+
 export default async (req: Request, _context: Context) => {
   const { user, response } = await requireUser();
   if (!user) return response;
@@ -70,7 +155,14 @@ export default async (req: Request, _context: Context) => {
       responses: responses.filter((item) => item.pollId === poll.id),
     }));
     const tasks = groupIds.length ? await db.select().from(groupTasks).where(inArray(groupTasks.groupId, groupIds)) : [];
-    return json({ groups: mine, profiles: memberProfiles, polls: pollsWithResponses, tasks });
+    const pages = groupIds.length ? await db.select().from(groupPages).where(inArray(groupPages.groupId, groupIds)) : [];
+    return json({
+      groups: mine,
+      profiles: memberProfiles,
+      polls: pollsWithResponses,
+      tasks,
+      pages: pages.map(pageToClient),
+    });
   }
 
   if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
@@ -110,6 +202,18 @@ export default async (req: Request, _context: Context) => {
     const memberIds = Array.isArray(group.memberIds) ? group.memberIds.filter((id) => id !== user.id) : [];
     if (memberIds.length === (Array.isArray(group.memberIds) ? group.memberIds.length : 0) && !isMember(group, user.id)) {
       return json({ error: "forbidden" }, 403);
+    }
+    if (!memberIds.length) {
+      const polls = await db.select().from(meetingPolls).where(eq(meetingPolls.groupId, groupId));
+      const pollIds = polls.map((poll) => poll.id);
+      if (pollIds.length) {
+        await db.delete(pollResponses).where(inArray(pollResponses.pollId, pollIds));
+        await db.delete(meetingPolls).where(eq(meetingPolls.groupId, groupId));
+      }
+      await db.delete(groupPages).where(eq(groupPages.groupId, groupId));
+      await db.delete(groupTasks).where(eq(groupTasks.groupId, groupId));
+      await db.delete(groups).where(eq(groups.id, groupId));
+      return json({ ok: true, id: groupId, deleted: true });
     }
     await db.update(groups).set({ memberIds }).where(eq(groups.id, group.id));
     return json({ ok: true, id: groupId });
@@ -233,7 +337,7 @@ export default async (req: Request, _context: Context) => {
     const [profile] = await db.select().from(profiles).where(eq(profiles.userId, user.id)).limit(1);
     const createdByName = profile?.nickname || String(user.email || "").split("@")[0] || "member";
     const task = {
-      id: `gtask-${Date.now()}`,
+      id: `gtask-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       groupId,
       title,
       note: String(body.note || "").trim() || null,
@@ -243,6 +347,7 @@ export default async (req: Request, _context: Context) => {
       priority: body.priority === "high" || body.priority === "low" ? String(body.priority) : "normal",
       createdBy: user.id,
       createdByName,
+      assignmentGroupId: String(body.assignmentGroupId || "").trim() || null,
     };
     await db.insert(groupTasks).values(task);
     return json({ task });
@@ -293,6 +398,153 @@ export default async (req: Request, _context: Context) => {
     if (task.createdBy !== user.id && (!group || !isMember(group, user.id))) return json({ error: "forbidden" }, 403);
     await db.delete(groupTasks).where(eq(groupTasks.id, taskId));
     return json({ ok: true, id: taskId });
+  }
+
+  if (body.action === "upsert-page") {
+    const groupId = String(body.groupId || "");
+    const pageId = String(body.id || body.pageId || "");
+    const type =
+      body.type === "folder" || body.type === "pdf" || body.type === "link" ? String(body.type) : "page";
+    if (!groupId || !pageId) return json({ error: "missing" }, 400);
+    if (type === "link" && !sanitizeLinkUrl(body.url)) return json({ error: "invalid-url" }, 400);
+    const [group] = await db.select().from(groups).where(eq(groups.id, groupId)).limit(1);
+    if (!group || !isMember(group, user.id)) return json({ error: "forbidden" }, 403);
+    const [profile] = await db.select().from(profiles).where(eq(profiles.userId, user.id)).limit(1);
+    const actorName = displayName(user, profile?.nickname);
+    const payload = sanitizePagePayload(body && typeof body === "object" ? (body as Record<string, unknown>) : {}, type);
+    const name =
+      String(body.name || "").trim().slice(0, 120) ||
+      (type === "folder" ? "새로운 폴더" : type === "pdf" ? "PDF" : type === "link" ? "링크" : "새로운 페이지");
+    const [existing] = await db.select().from(groupPages).where(eq(groupPages.id, pageId)).limit(1);
+    if (existing) {
+      if (existing.groupId !== groupId || !isMember(group, user.id)) return json({ error: "forbidden" }, 403);
+      const incomingRev = Number(body.revision);
+      if (Number.isFinite(incomingRev) && incomingRev !== existing.revision) {
+        return json({ error: "conflict", page: pageToClient(existing) }, 409);
+      }
+      const revision = existing.revision + 1;
+      await db
+        .update(groupPages)
+        .set({
+          parentId: body.parentId == null ? existing.parentId : String(body.parentId || "") || null,
+          name,
+          type,
+          color: String(body.color || existing.color || "#2563eb"),
+          icon: String(body.icon || existing.icon || ""),
+          payload,
+          revision,
+          updatedBy: user.id,
+          updatedByName: actorName,
+          updatedAt: new Date(),
+        })
+        .where(eq(groupPages.id, pageId));
+      const [saved] = await db.select().from(groupPages).where(eq(groupPages.id, pageId)).limit(1);
+      return json({ page: saved ? pageToClient(saved) : pageToClient({ ...existing, revision, payload, name, type }) });
+    }
+    const row = {
+      id: pageId,
+      groupId,
+      parentId: String(body.parentId || "") || null,
+      name,
+      type,
+      color: String(body.color || "#2563eb"),
+      icon: String(body.icon || (type === "folder" ? "F" : type === "pdf" ? "P" : type === "link" ? "L" : "N")),
+      payload,
+      revision: 1,
+      updatedBy: user.id,
+      updatedByName: actorName,
+      createdBy: user.id,
+    };
+    await db.insert(groupPages).values(row);
+    return json({ page: pageToClient({ ...row, createdAt: new Date(), updatedAt: new Date() }) });
+  }
+
+  if (body.action === "delete-page") {
+    const pageId = String(body.pageId || body.id || "");
+    if (!pageId) return json({ error: "missing" }, 400);
+    const [page] = await db.select().from(groupPages).where(eq(groupPages.id, pageId)).limit(1);
+    if (!page) return json({ error: "missing" }, 404);
+    const [group] = await db.select().from(groups).where(eq(groups.id, page.groupId)).limit(1);
+    if (!group || !isMember(group, user.id)) return json({ error: "forbidden" }, 403);
+    const all = await db.select().from(groupPages).where(eq(groupPages.groupId, page.groupId));
+    const remove = new Set<string>([pageId]);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const item of all) {
+        if (item.parentId && remove.has(item.parentId) && !remove.has(item.id)) {
+          remove.add(item.id);
+          grew = true;
+        }
+      }
+    }
+    await db.delete(groupPages).where(inArray(groupPages.id, [...remove]));
+    return json({ ok: true, ids: [...remove] });
+  }
+
+  if (body.action === "confirm-poll" || body.action === "unconfirm-poll") {
+    const pollId = String(body.pollId || body.id || "");
+    if (!pollId) return json({ error: "missing" }, 400);
+    const [poll] = await db.select().from(meetingPolls).where(eq(meetingPolls.id, pollId)).limit(1);
+    if (!poll) return json({ error: "missing" }, 404);
+    const [group] = await db.select().from(groups).where(eq(groups.id, poll.groupId)).limit(1);
+    if (!group || !isMember(group, user.id)) return json({ error: "forbidden" }, 403);
+    if (group.createdBy !== user.id) return json({ error: "forbidden" }, 403);
+    if (body.action === "unconfirm-poll") {
+      await db
+        .update(meetingPolls)
+        .set({
+          status: "cancelled",
+          confirmedDate: null,
+          confirmedStart: null,
+          confirmedEnd: null,
+          confirmedBy: user.id,
+          confirmedAt: new Date(),
+        })
+        .where(eq(meetingPolls.id, pollId));
+      return json({
+        poll: {
+          ...poll,
+          status: "cancelled",
+          confirmedDate: null,
+          confirmedStart: null,
+          confirmedEnd: null,
+          confirmedBy: user.id,
+        },
+      });
+    }
+    const slot = String(body.slot || "");
+    const match = slot.match(/^(\d{4}-\d{2}-\d{2})-(\d{2}:\d{2})$/);
+    const date = DATE_RE.test(String(body.date || "")) ? String(body.date) : match?.[1] || "";
+    const startTime = TIME_RE.test(String(body.startTime || "")) ? String(body.startTime) : match?.[2] || "";
+    let endTime = TIME_RE.test(String(body.endTime || "")) ? String(body.endTime) : "";
+    if (!endTime && startTime) {
+      const [hours, minutes] = startTime.split(":").map(Number);
+      const total = (hours || 0) * 60 + (minutes || 0) + 30;
+      endTime = `${String(Math.floor(total / 60) % 24).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+    }
+    if (!date || !startTime || !endTime) return json({ error: "slot-required" }, 400);
+    await db
+      .update(meetingPolls)
+      .set({
+        status: "confirmed",
+        confirmedDate: date,
+        confirmedStart: startTime,
+        confirmedEnd: endTime,
+        confirmedBy: user.id,
+        confirmedAt: new Date(),
+      })
+      .where(eq(meetingPolls.id, pollId));
+    return json({
+      poll: {
+        ...poll,
+        status: "confirmed",
+        confirmedDate: date,
+        confirmedStart: startTime,
+        confirmedEnd: endTime,
+        confirmedBy: user.id,
+      },
+    });
   }
 
   return json({ error: "unknown action" }, 400);

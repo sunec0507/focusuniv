@@ -2,7 +2,7 @@ import type { Config, Context } from "@netlify/functions";
 import { admin } from "@netlify/identity";
 import { eq, inArray } from "drizzle-orm";
 import { db } from "../../db/index.ts";
-import { groups, meetingPolls, pollResponses, profiles, userStates } from "../../db/schema.ts";
+import { groupPages, groupTasks, groups, meetingPolls, pollResponses, profiles, userStates } from "../../db/schema.ts";
 import { json, requireUser } from "./_shared/auth.ts";
 
 function memberIdsOf(group: { memberIds: unknown }) {
@@ -16,6 +16,8 @@ async function deleteGroupCascade(groupId: string) {
     await db.delete(pollResponses).where(inArray(pollResponses.pollId, pollIds));
     await db.delete(meetingPolls).where(eq(meetingPolls.groupId, groupId));
   }
+  await db.delete(groupPages).where(eq(groupPages.groupId, groupId));
+  await db.delete(groupTasks).where(eq(groupTasks.groupId, groupId));
   await db.delete(groups).where(eq(groups.id, groupId));
 }
 

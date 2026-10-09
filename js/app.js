@@ -119,6 +119,9 @@ const ui = {
   pdfZoom: 1,
   pdfInk: { mode: "off", color: "#111827", width: 3.5 },
   pdfNotesOpen: false,
+  pdfAiOpen: false,
+  pdfAiTab: "summary",
+  pdfAiBusy: false,
   noteQuery: "",
   notePageId: null,
   courseId: null,
@@ -142,6 +145,8 @@ const ui = {
   pollMenu: null,
   pollDrafts: {},
   pollHover: null,
+  pollPick: {},
+  pollReselect: "",
   settingsTab: "account",
   permCamera: "",
   permNotify: "",
@@ -152,6 +157,15 @@ const ui = {
   noteMoreOpen: false,
   searchQuery: "",
   searchHits: [],
+  pageSave: {},
+  eventEndTouched: false,
+  eventOccurrence: "",
+  eventScope: "",
+  eventDraft: null,
+  quickAddType: "",
+  todayExtrasOpen: false,
+  pollDrag: null,
+  pageConflict: null,
 };
 
 let lastRouteName = "";
@@ -168,7 +182,7 @@ const deletedPollIds = new Set();
 const groupMemberSnapshot = new Map();
 const pollSaveSeq = {};
 
-const GROUP_TABS = ["tasks", "projects", "schedule"];
+const GROUP_TABS = ["tasks", "links", "projects", "schedule"];
 
 function parseHash() {
   const hash = location.hash.replace(/^#/, "") || "/today";
@@ -198,6 +212,7 @@ function groupPath(groupId, tab = "tasks", pageId = "") {
   if (tab === "projects" && pageId) return `/groups/${groupId}/projects/${pageId}`;
   if (tab === "projects") return `/groups/${groupId}/projects`;
   if (tab === "schedule") return `/groups/${groupId}/schedule`;
+  if (tab === "links") return `/groups/${groupId}/links`;
   return `/groups/${groupId}`;
 }
 
@@ -224,9 +239,9 @@ function navItems() {
     { href: "#/today", name: "today", label: "오늘 할 일", ic: "list", primary: true },
     { href: "#/calendar", name: "calendar", label: "캘린더", ic: "calendar", primary: true },
     { href: "#/timetable", name: "timetable", label: "시간표", ic: "timetable", primary: true },
-    { href: "#/projects", name: "projects", label: "프로젝트", ic: "folder", primary: true },
-    { href: "#/timeline", name: "timeline", label: "타임라인", ic: "clock", primary: false },
-    { href: "#/groups", name: "groups", label: "그룹", ic: "users", primary: false },
+    { href: "#/projects", name: "projects", label: "내 자료", ic: "folder", primary: true },
+    { href: "#/timeline", name: "timeline", label: "공부 기록", ic: "clock", primary: false },
+    { href: "#/groups", name: "groups", label: "팀플", ic: "users", primary: false },
   ];
 }
 
@@ -262,6 +277,7 @@ function side(active) {
           .join("")}
       </nav>
       <div class="side-foot">
+        <button type="button" class="side-foot-link side-quick-add" data-act="open-quick-add">${icon("plus", 16)} 빠른 추가</button>
         <button type="button" class="side-foot-link" data-act="open-search">${icon("search", 16)} 검색</button>
         <a class="side-foot-link ${active === "profile" ? "active" : ""}" href="#/profile">${icon("user", 16)} 프로필</a>
         <a class="side-foot-link ${active === "settings" ? "active" : ""}" href="#/settings">${icon("sliders", 16)} 설정</a>
@@ -286,15 +302,23 @@ function bell() {
           ? `<div class="panel">
             ${
               notes.length
-                ? notes
-                    .map(
-                      (note) =>
-                        `<button class="note" data-act="go-notification" data-id="${note.id}" data-group="${escapeHtml(note.groupId || "")}" data-task="${escapeHtml(note.taskId || "")}" data-poll="${escapeHtml(note.pollId || "")}">
+                ? (() => {
+                    const work = notes.filter((note) => note.type !== "update");
+                    const product = notes.filter((note) => note.type === "update");
+                    const block = (label, list) =>
+                      list.length
+                        ? `<p class="bell-label">${label}</p>${list
+                            .map(
+                              (note) =>
+                                `<button class="note ${note.type === "update" ? "note-product" : ""}" data-act="go-notification" data-id="${note.id}" data-group="${escapeHtml(note.groupId || "")}" data-task="${escapeHtml(note.taskId || "")}" data-poll="${escapeHtml(note.pollId || "")}">
                           <b>${escapeHtml(note.title)}</b>
                           <div class="task-meta">${escapeHtml(note.body)}</div>
                         </button>`,
-                    )
-                    .join("")
+                            )
+                            .join("")}`
+                        : "";
+                    return `${block("업무", work)}${block("앱 안내", product)}`;
+                  })()
                 : `<div class="empty">아직 알림이 없습니다.</div>`
             }
           </div>`
@@ -313,7 +337,7 @@ function top(title, sub, extra = "", opts = {}) {
         ${titleHtml}
         ${sub ? `<p class="page-date">${sub}</p>` : ""}
       </div>
-      <div class="row-actions"><button type="button" class="icon-btn" data-act="open-search" aria-label="검색">${icon("search")}</button>${extra}${bell()}</div>
+      <div class="row-actions"><button type="button" class="icon-btn top-search" data-act="open-search" aria-label="검색">${icon("search")}</button>${extra}${bell()}</div>
     </div>`;
 }
 
@@ -415,6 +439,7 @@ function applyIncomingPolls(incoming) {
     (item) => item.pendingCreate && item.id && !ids.has(item.id) && !deletedPollIds.has(item.id),
   );
   remotePolls = [...pending, ...list];
+  notePollStatusChanges(remotePolls);
 }
 
 function ensureRemoteProfiles() {
@@ -442,7 +467,7 @@ function ensureRemoteProfiles() {
 function requireLoginForGroups() {
   if (auth.user()) return true;
   ui.modal = "auth";
-  ui.toast = { title: "로그인이 필요해요", body: "그룹 기능은 로그인 후 이용할 수 있어요" };
+  ui.toast = { title: "로그인이 필요해요", body: "팀플 기능은 로그인 후 이용할 수 있어요" };
   return false;
 }
 
@@ -460,14 +485,215 @@ function maybeRefreshGroupBundle() {
   refreshGroupBundle();
 }
 
+// 팀플 링크: Notion·Google Docs·드라이브 등 외부 자료 링크. 서버에서는 group_pages에 type "link"로 저장된다.
+let groupLinks = [];
+
+function isGroupLink(page) {
+  return page?.type === "link";
+}
+
 function applyGroupBundle(data) {
   remoteProfiles = Array.isArray(data?.profiles) ? data.profiles : [];
   applyIncomingPolls(data?.polls);
   store.applyRemoteGroupTasks(data?.tasks);
+  const incomingPages = Array.isArray(data?.pages) ? data.pages : [];
+  groupLinks = incomingPages.filter(isGroupLink);
+  const stale = store.applyRemoteGroupPages(
+    incomingPages.filter((page) => !isGroupLink(page)),
+    { keepIds: [...groupPageDirty] },
+  );
+  for (const page of stale || []) {
+    setPageSave(page.id, "conflict");
+    if (!ui.pageConflict) ui.pageConflict = { pageId: page.id, page };
+  }
   const uid = auth.user()?.id;
   const incoming = Array.isArray(data?.groups) ? data.groups : [];
   store.setGroups(uid ? incoming.filter((group) => (group.memberIds || []).includes(uid)) : []);
   syncGroupActivityAlerts();
+}
+
+function serializeGroupPage(page) {
+  if (!page) return null;
+  return {
+    id: page.id,
+    groupId: page.groupId,
+    parentId: page.parentId,
+    name: page.name,
+    type: page.type,
+    color: page.color,
+    icon: page.icon,
+    tabs: page.tabs,
+    activeTabId: page.activeTabId,
+    blocks: page.blocks,
+    pdfName: page.pdfName,
+    pdfSize: page.pdfSize,
+    pdfPage: page.pdfPage,
+    pdfNotes: page.pdfNotes,
+    pdfAnnotations: page.pdfAnnotations,
+    courseLabel: page.courseLabel,
+    revision: page.revision,
+  };
+}
+
+const groupPageDirty = new Set();
+let groupPageSaveTimer = 0;
+
+function setPageSave(pageId, status) {
+  if (!pageId) return;
+  ui.pageSave = { ...ui.pageSave, [pageId]: status };
+  const el = document.querySelector(`[data-page-save="${pageId}"]`);
+  if (el) el.innerHTML = pageSaveLabel(status);
+}
+
+function pageSaveLabel(status) {
+  if (status === "saving") return "저장 중";
+  if (status === "saved") return "저장됨";
+  if (status === "error") return "동기화 실패";
+  if (status === "conflict") return "다른 사용자의 최신 변경사항이 있음";
+  if (status === "forbidden") return "접근권한 없음";
+  return "";
+}
+
+async function saveGroupPageNow(pageId, { overwrite = false } = {}) {
+  const page = store.projectById(pageId);
+  if (!page?.groupId) return;
+  if (!store.getState().groups.some((group) => group.id === page.groupId)) {
+    setPageSave(pageId, "forbidden");
+    return;
+  }
+  setPageSave(pageId, "saving");
+  try {
+    const payload = serializeGroupPage(page);
+    if (overwrite && ui.pageConflict?.page?.id === pageId) {
+      payload.revision = ui.pageConflict.page.revision;
+    }
+    const data = await auth.upsertGroupPage(payload);
+    store.applyServerPage({ ...data.page, pdfUri: page.pdfUri });
+    groupPageDirty.delete(pageId);
+    setPageSave(pageId, "saved");
+    if (ui.pageConflict?.pageId === pageId) ui.pageConflict = null;
+  } catch (err) {
+    if (err.status === 409) {
+      setPageSave(pageId, "conflict");
+      ui.pageConflict = { pageId, page: err.payload?.page };
+      ui.modal = "page-conflict";
+      render();
+    } else if (err.status === 403) {
+      setPageSave(pageId, "forbidden");
+    } else {
+      setPageSave(pageId, "error");
+    }
+  }
+}
+
+function queueGroupPageSave(pageId) {
+  const page = store.projectById(pageId);
+  if (!page?.groupId) return;
+  groupPageDirty.add(pageId);
+  setPageSave(pageId, "saving");
+  clearTimeout(groupPageSaveTimer);
+  groupPageSaveTimer = setTimeout(() => {
+    flushGroupPageSaves();
+  }, 800);
+}
+
+async function flushGroupPageSaves() {
+  clearTimeout(groupPageSaveTimer);
+  const ids = [...groupPageDirty];
+  for (const id of ids) await saveGroupPageNow(id);
+}
+
+// 팀플 페이지 변경을 서버에 저장한다. (모듈 네임스페이스를 덮어쓰지 않고 store 훅 사용)
+store.setPageHooks({
+  afterUpdate: (id) => queueGroupPageSave(id),
+  afterAdd: (page) => {
+    if (page?.groupId) queueGroupPageSave(page.id);
+  },
+  afterDelete: (page) => {
+    if (!page?.groupId) return;
+    auth.deleteGroupPage(page.id).catch(() => {
+      ui.toast = { title: "팀플 자료", body: "페이지 삭제를 서버에 반영하지 못했어요." };
+    });
+  },
+});
+
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", () => {
+    flushGroupPageSaves();
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flushGroupPageSaves();
+  });
+}
+
+function courseLabel(courseId) {
+  if (!courseId) return "";
+  const course = store.courseById(courseId);
+  return course?.title || course?.name || "삭제된 과목";
+}
+
+function courseSelectHtml(name, value, { optional = true } = {}) {
+  const courses = store.allCourses();
+  return `<label class="due-field">과목 (선택)
+    <select class="field" name="${escapeHtml(name)}">
+      <option value="">${optional ? "연결 안 함" : "과목 선택"}</option>
+      ${courses
+        .map(
+          (course) =>
+            `<option value="${escapeHtml(course.id)}" ${course.id === value ? "selected" : ""}>${escapeHtml(course.title || course.name || "수업")}</option>`,
+        )
+        .join("")}
+    </select>
+  </label>`;
+}
+
+function confirmedPollEvents() {
+  return remotePolls
+    .filter((poll) => poll.status === "confirmed" && poll.confirmedDate)
+    .map((poll) => ({
+      id: `gevent-${poll.id}`,
+      title: poll.title || "확정된 약속",
+      date: poll.confirmedDate,
+      startTime: poll.confirmedStart || "09:00",
+      endTime: poll.confirmedEnd || "10:00",
+      color: "#6366F1",
+      source: "poll",
+      groupId: poll.groupId,
+      pollId: poll.id,
+      allDay: false,
+    }));
+}
+
+function eventsForDate(dateKey) {
+  return [...store.eventsOn(dateKey), ...confirmedPollEvents().filter((event) => event.date === dateKey)];
+}
+
+const seenPollStatus = new Map();
+function notePollStatusChanges(polls) {
+  for (const poll of polls || []) {
+    const key = `${poll.status || "open"}:${poll.confirmedDate || ""}:${poll.confirmedStart || ""}`;
+    const prev = seenPollStatus.get(poll.id);
+    seenPollStatus.set(poll.id, key);
+    if (!prev || prev === key) continue;
+    const group = store.getState().groups.find((item) => item.id === poll.groupId);
+    if (poll.status === "confirmed") {
+      store.pushNotification({
+        type: prev.startsWith("confirmed") ? "poll-change" : "poll-confirm",
+        title: prev.startsWith("confirmed") ? "확정된 약속이 변경됐어요" : "약속이 확정됐어요",
+        body: `${group?.name ? `${group.name} · ` : ""}${poll.title || "약속"} · ${poll.confirmedDate} ${poll.confirmedStart || ""}–${poll.confirmedEnd || ""}`,
+        groupId: poll.groupId,
+        pollId: poll.id,
+      });
+    } else if (poll.status === "cancelled") {
+      store.pushNotification({
+        type: "poll-cancel",
+        title: "확정된 약속이 취소됐어요",
+        body: `${group?.name ? `${group.name} · ` : ""}${poll.title || "약속"}`,
+        groupId: poll.groupId,
+        pollId: poll.id,
+      });
+    }
+  }
 }
 
 async function hydrateAccount() {
@@ -687,16 +913,46 @@ function polishTimeField(el) {
 }
 
 function eventFormFields(event) {
+  const allDay = Boolean(event?.allDay);
+  const freq = event?.repeat?.freq || "";
+  const start = event?.startTime || "09:00";
+  const end = event?.endTime || "10:00";
+  const err = ui.eventDraft?.error || "";
   return `
     <input class="field" name="title" placeholder="일정 제목" value="${escapeHtml(event?.title || "")}" required>
-    <input class="field" name="date" type="date" value="${escapeHtml(event?.date || dateKeyFrom(ui.date))}" required>
-    <div class="event-times">
-      ${timeField("startTime", event?.startTime || "09:00", "시작")}
-      ${timeField("endTime", event?.endTime || "10:00", "종료")}
+    <input class="field" name="date" type="date" value="${escapeHtml(event?.date || event?.occurrenceDate || dateKeyFrom(ui.date))}" required>
+    <label class="check-row"><input type="checkbox" name="allDay" ${allDay ? "checked" : ""} data-act="toggle-all-day"> 하루 종일</label>
+    <div class="event-times ${allDay ? "is-hidden" : ""}">
+      ${timeField("startTime", start, "시작")}
+      ${timeField("endTime", end, "종료")}
     </div>
-    <label class="event-color-row">색상
-      <input class="field cat-color" name="color" type="color" value="${escapeHtml(eventColorValue(event?.color))}">
-    </label>`;
+    <div class="event-durations ${allDay ? "is-hidden" : ""}" role="group" aria-label="일정 길이">
+      <button type="button" class="ghost" data-act="event-duration" data-min="30">30분</button>
+      <button type="button" class="ghost" data-act="event-duration" data-min="60">1시간</button>
+      <button type="button" class="ghost" data-act="event-duration" data-min="90">1시간 30분</button>
+    </div>
+    ${err ? `<p class="field-error" id="event-time-error">${escapeHtml(err)}</p>` : ""}
+    ${courseSelectHtml("courseId", event?.courseId || "")}
+    <details class="composer-more">
+      <summary>반복</summary>
+      <label class="due-field">반복 주기
+        <select class="field" name="repeatFreq">
+          <option value="" ${freq ? "" : "selected"}>반복 없음</option>
+          <option value="weekly" ${freq === "weekly" ? "selected" : ""}>매주</option>
+          <option value="biweekly" ${freq === "biweekly" ? "selected" : ""}>격주</option>
+          <option value="monthly" ${freq === "monthly" ? "selected" : ""}>매월</option>
+        </select>
+      </label>
+      <label class="due-field">반복 종료일
+        <input class="field" name="repeatUntil" type="date" value="${escapeHtml(event?.repeat?.until || "")}">
+      </label>
+    </details>
+    <details class="composer-more">
+      <summary>색상</summary>
+      <label class="event-color-row">색상
+        <input class="field cat-color" name="color" type="color" value="${escapeHtml(eventColorValue(event?.color))}">
+      </label>
+    </details>`;
 }
 
 function halfHourKeys(startTime, endTime) {
@@ -761,20 +1017,31 @@ function compareTaskPriority(a, b) {
   return 0;
 }
 
+function hasUsedFocus() {
+  return Boolean(store.getState().activeTimer) || (store.getState().sessions || []).some((session) => Number(session.durationSeconds) > 0);
+}
+
 function taskRow(task, opts = {}) {
   const running = store.getState().activeTimer?.taskId === task.id;
   const group = task.groupId ? store.getState().groups.find((item) => item.id === task.groupId) : null;
   const due = task.dueDate ? dueLabel(task.dueDate) : "";
-  const metaParts = [task.assigneeName, task.note].filter(Boolean);
-  const subs = Array.isArray(task.subtasks) ? task.subtasks : [];
-  const subDone = subs.filter((item) => item.done).length;
+  const course = courseLabel(task.courseId);
+  const mine = !task.groupId || assigneeNameIsMe(task.assigneeName);
+  const assignLabel = task.assignmentGroupId ? "전체 담당" : task.assigneeName || "";
+  const metaParts = [
+    group ? (mine ? `팀플 · 내가 담당` : `팀플 · ${assignLabel}`) : "",
+    assignLabel && task.assignmentGroupId ? assignLabel : !task.assignmentGroupId ? task.assigneeName : "",
+    course,
+    task.repeat?.freq ? "반복" : "",
+  ].filter(Boolean);
   const prio = task.priority === "high" || task.priority === "low" ? task.priority : "";
   const prioLabel = prio === "high" ? "높음" : prio === "low" ? "낮음" : "";
+  const showFocusText = !opts.hidePlay && !hasUsedFocus() && task.status !== "completed";
   return `
-    <div class="task ${task.status === "completed" ? "done" : ""}">
+    <div class="task ${task.status === "completed" ? "done" : ""} ${task.groupId ? "from-group" : ""}">
       <button class="check" data-act="toggle-task" data-id="${task.id}" aria-label="완료">${task.status === "completed" ? icon("check", 12) : ""}</button>
-      <div>
-        <div class="task-title">${prio ? `<span class="prio-dot ${prio}" title="${prioLabel}"></span>` : ""}${escapeHtml(task.title)}${prio === "high" ? `<span class="prio-label">높음</span>` : ""}${group ? `<span class="team-badge">${escapeHtml(group.name)}</span>` : ""}${due ? `<span class="due-chip">${due}</span>` : ""}${subs.length ? `<span class="sub-chip">${subDone}/${subs.length} 완료</span>` : ""}</div>
+      <div class="task-body">
+        <div class="task-title">${prio ? `<span class="prio-dot ${prio}" title="${prioLabel}"></span>` : ""}${escapeHtml(task.title)}${group ? `<span class="team-badge">${escapeHtml(group.name)}</span>` : ""}${due ? `<span class="due-chip">${due}</span>` : ""}</div>
         <div class="task-meta">${metaParts.map(escapeHtml).join(" · ")}</div>
       </div>
       <span class="dur">${formatHoursMinutes(task.focusedSeconds)}</span>
@@ -796,7 +1063,7 @@ function taskRow(task, opts = {}) {
       ${
         opts.hidePlay
           ? ""
-          : `<button class="play" data-act="play-task" data-id="${task.id}" aria-label="시간 측정">${running ? icon("pause", 14) : icon("play", 14)}</button>`
+          : `<button class="play ${showFocusText ? "play-labeled" : ""}" data-act="play-task" data-id="${task.id}" aria-label="집중 시작">${running ? icon("pause", 14) : icon("play", 14)}${showFocusText ? `<span>집중 시작</span>` : ""}</button>`
       }
     </div>`;
 }
@@ -853,7 +1120,7 @@ function upcomingDeadlineStrip() {
   const groups = store.getState().groups || [];
   return `
     <div class="deadline-strip">
-      <span class="tt-switch-label">다가오는 마감</span>
+      <span class="tt-switch-label">이번 주 마감</span>
       <div class="tt-chip-row">
         ${items
           .map((task) => {
@@ -871,6 +1138,42 @@ function upcomingDeadlineStrip() {
     </div>`;
 }
 
+function todayQuickAdd(dateKey) {
+  const cats = store.getState().categories;
+  const picked = ui.addingCategory || cats[0]?.id || "school";
+  const cat = cats.find((item) => item.id === picked) || cats[0];
+  return `
+    <form class="today-quick-add" data-act="add-task">
+      <input class="field" name="title" data-add-title placeholder="할 일 제목" required>
+      <div class="today-quick-row">
+        <select class="field" name="categoryId" aria-label="카테고리">
+          ${cats
+            .map((item) => `<option value="${item.id}" ${item.id === picked ? "selected" : ""}>${escapeHtml(item.name)}</option>`)
+            .join("")}
+        </select>
+        <input class="field" name="date" type="date" value="${dateKey}" required aria-label="날짜">
+      </div>
+      <p class="page-date">${cat ? `${escapeHtml(cat.name)}에 추가됩니다` : ""}</p>
+      <details class="composer-more" ${ui.todayExtrasOpen ? "open" : ""}>
+        <summary>중요도 · 반복 · 메모</summary>
+        <select class="field" name="priority" aria-label="중요도">
+          <option value="normal">보통</option>
+          <option value="high">높음</option>
+          <option value="low">낮음</option>
+        </select>
+        <select class="field" name="repeatFreq" aria-label="반복">
+          <option value="">반복 없음</option>
+          <option value="daily">매일</option>
+          <option value="weekly">매주</option>
+        </select>
+        <input class="field" name="note" placeholder="메모 (선택)">
+        <input class="field" name="subtask" placeholder="하위 항목 (선택, 쉼표로 구분)">
+        ${courseSelectHtml("courseId", "")}
+      </details>
+      <button class="primary" type="submit">할 일 추가</button>
+    </form>`;
+}
+
 function viewToday(embedded = false) {
   const key = dateKeyFrom(ui.date);
   const strip = upcomingDeadlineStrip();
@@ -879,25 +1182,31 @@ function viewToday(embedded = false) {
     cat,
     tasks: tasks.filter((task) => task.categoryId === cat.id),
   }));
+  const emptyHint = !tasks.length
+    ? `<div class="empty today-empty"><b>오늘 할 일이 없습니다</b><p>할 일을 추가한 뒤 집중 시작을 눌러 공부 시간을 기록할 수 있습니다</p></div>`
+    : "";
   const list = groups
-    .map(
-      (group) => `
+    .map((group) => {
+      if (!group.tasks.length) {
+        return `<details class="empty-cat"><summary><span class="dot" style="background:${group.cat.color}"></span>${escapeHtml(group.cat.name)} · 없음</summary></details>`;
+      }
+      return `
           <div class="group-title"><span class="dot" style="background:${group.cat.color}"></span>${escapeHtml(group.cat.name)}</div>
           <div class="list">
             ${group.tasks.map((task) => taskRow(task)).join("")}
-            ${categoryAdd(key, group.cat.id)}
-          </div>`,
-    )
+          </div>`;
+    })
     .join("");
+  const composer = todayQuickAdd(key);
   if (embedded) {
-    return `${strip}<div class="embed-nav">${dateNav("today")}</div>${list}`;
+    return `${strip}<div class="embed-nav">${dateNav("today")}</div>${composer}${emptyHint}${list}`;
   }
   const extra = `<button class="ghost" data-act="go-categories">${icon("settings", 14)} 카테고리 관리</button>${dateNav("today")}`;
   return `
     ${top("오늘 할 일", formatShortKoreanDate(ui.date), extra)}
     ${strip}
     <div class="today-split">
-      <div class="today-split-list">${list}</div>
+      <div class="today-split-list">${composer}${emptyHint}${list}</div>
       ${viewTodaySchedule()}
     </div>`;
 }
@@ -977,7 +1286,7 @@ function viewTimer(embedded = false) {
         </div>
         <div class="night-controls">
           <button class="night-pause" data-act="${s.activeTimer.isRunning ? "pause" : "resume"}" aria-label="${s.activeTimer.isRunning ? "일시정지" : "재개"}">${s.activeTimer.isRunning ? icon("pause", 26) : icon("play", 26)}</button>
-          <button class="night-stop" data-act="finish">${icon("stop", 18)} 측정 종료</button>
+          <button class="night-stop" data-act="finish">${icon("stop", 18)} 공부 기록 종료</button>
         </div>
         ${auxPanel(aux, remain)}
       </div>`;
@@ -990,12 +1299,12 @@ function viewTimer(embedded = false) {
         <div class="ring-face">
           <div>
             <div class="ring-time" data-clock="main">${face}</div>
-            <div class="ring-sub">오늘 할 일에서 재생을 눌러 측정하세요</div>
+            <div class="ring-sub">오늘 할 일에서 집중 시작을 눌러 측정하세요</div>
           </div>
         </div>
       </div>
     </div>
-    <div class="empty">오늘 할 일에서 재생을 누르면 집중 화면으로 이동합니다.</div>`;
+    <div class="empty">오늘 할 일에서 집중 시작을 누르면 집중 화면으로 이동합니다.</div>`;
 }
 
 function viewTimeline() {
@@ -1015,7 +1324,7 @@ function viewTimeline() {
     .filter((group) => group.tasks.length > 0 || group.seconds > 0);
   const hours = Array.from({ length: 25 }, (_, hour) => hour);
   return `
-    ${top("타임라인", formatShortKoreanDate(ui.timeline), dateNav("timeline"))}
+    ${top("공부 기록", formatShortKoreanDate(ui.timeline), dateNav("timeline"))}
     <div class="tl-head">
       <span>분 단위 집중 기록</span>
       <b>${formatDuration(total)}</b>
@@ -1101,18 +1410,35 @@ function viewCalendar() {
           const key = formatDateKey(date);
           const out = date.getMonth() !== ui.month.getMonth();
           const prog = store.progressOn(key);
-          const events = s.events.filter((event) => event.date === key).slice(0, 2);
+          const dayEvents = eventsForDate(key);
+          const deadlines = store.tasksOn(key).filter((task) => task.dueDate === key);
+          const chips = [
+            ...dayEvents.map((event) => ({
+              kind: "event",
+              title: event.title,
+              color: eventColorValue(event.color),
+              group: event.source === "poll",
+            })),
+            ...deadlines.map((task) => ({ kind: "due", title: task.title, color: "", group: Boolean(task.groupId) })),
+          ];
+          const visible = chips.slice(0, 2);
+          const more = chips.length - visible.length;
           const isToday = key === todayKey();
           const isSelected = key === selectedKey;
           return `<button class="cal-cell ${out ? "out" : ""} ${isToday ? "today" : ""} ${isSelected ? "selected" : ""}" data-act="pick-day" data-key="${key}">
             <span class="cal-num">${date.getDate()}</span>
             ${
               prog.total
-                ? `<span class="mini-track" title="이수율 ${prog.percent}%"><span class="mini-fill" style="transform:scaleX(${prog.percent / 100})"></span></span>
-                   <span class="cal-pct">${prog.percent}%</span>`
+                ? `<span class="mini-track" title="이수율 ${prog.percent}%"><span class="mini-fill" style="transform:scaleX(${prog.percent / 100})"></span></span>`
                 : ""
             }
-            ${events.map((event) => `<span class="event-chip" style="background:${eventColorValue(event.color)}">${escapeHtml(event.title)}</span>`).join("")}
+            ${visible
+              .map(
+                (item) =>
+                  `<span class="event-chip ${item.kind === "due" ? "due-chip-cal" : ""} ${item.group ? "group-event" : ""}" ${item.color ? `style="background:${item.color}"` : ""}>${item.group ? "팀플 · " : ""}${escapeHtml(item.title)}</span>`,
+              )
+              .join("")}
+            ${more > 0 ? `<span class="cal-more">+${more}</span>` : ""}
           </button>`;
         })
         .join("")}
@@ -1128,13 +1454,13 @@ function viewCalendar() {
     <div class="group-title">일정</div>
     <div class="list">
       ${
-        s.events.filter((event) => event.date === selectedKey).length
-          ? s.events
-              .filter((event) => event.date === selectedKey)
-              .map(
-                (event) =>
-                  `<div class="task"><div class="dot" style="background:${eventColorValue(event.color)}"></div><button type="button" class="event-open" data-act="show-event" data-id="${event.id}"><div class="task-title">${escapeHtml(event.title)}</div><div class="task-meta">${event.startTime}–${event.endTime}</div></button><button class="icon-btn" data-act="del-event" data-id="${event.id}">${icon("trash", 14)}</button></div>`,
-              )
+        eventsForDate(selectedKey).length
+          ? eventsForDate(selectedKey)
+              .map((event) => {
+                const group = event.groupId ? store.getState().groups.find((item) => item.id === event.groupId) : null;
+                const time = event.allDay ? "하루 종일" : `${event.startTime || ""}–${event.endTime || ""}`;
+                return `<div class="task"><div class="dot" style="background:${eventColorValue(event.color)}"></div><button type="button" class="event-open" data-act="show-event" data-id="${event.id}" data-occ="${event.occurrenceDate || event.date}"><div class="task-title">${escapeHtml(event.title)}${group || event.source === "poll" ? `<span class="team-badge">${escapeHtml(group?.name || "팀플")}</span>` : ""}</div><div class="task-meta">${time}${event.repeat?.freq ? " · 반복" : ""}</div></button></div>`;
+              })
               .join("")
           : `<div class="empty">일정이 없습니다.</div>`
       }
@@ -1177,7 +1503,7 @@ function viewTodaySchedule() {
         ${viewTimetableGrid(store.primaryCourses(), {
           onlyDay: timetableDayFromDate(date),
           now: isToday,
-          events: store.eventsOn(dateKeyFrom(date)),
+          events: eventsForDate(dateKeyFrom(date)),
         })}
       </div>
     </aside>`;
@@ -1335,14 +1661,142 @@ function timetableSwitcherHtml() {
     </div>`;
 }
 
+// 시간표 한 번에 입력: 한 줄에 한 과목. 예) "경영통계학 월 09:00-10:15 목 09:00-10:15 경영관 302"
+// CSV/탭 구분도 지원: 과목명, 요일, 시작, 종료, 강의실, 교수
+const PASTE_DAYS = { 월: 1, 화: 2, 수: 3, 목: 4, 금: 5, 토: 6, 일: 7 };
+const PASTE_COLORS = ["#0EA5E9", "#6366F1", "#2563EB", "#16A34A", "#D97706", "#DB2777"];
+
+function pasteTime(value) {
+  const m = String(value || "").trim().match(/^(\d{1,2})(?::|시\s*)?(\d{2})?/);
+  if (!m) return "";
+  const h = Number(m[1]);
+  const min = Number(m[2] || 0);
+  if (h > 23 || min > 59) return "";
+  return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
+}
+
+function parseCoursePaste(text) {
+  const byTitle = new Map();
+  const rows = [];
+  const lines = String(text || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  for (const line of lines) {
+    let title = "";
+    let room = "";
+    let professor = "";
+    const slots = [];
+    const cells = line.includes("\t") ? line.split("\t") : line.split(",").length >= 4 ? line.split(",") : null;
+    if (cells) {
+      const [t, dayText, start, end, r, p] = cells.map((cell) => String(cell || "").trim());
+      title = t;
+      room = r || "";
+      professor = p || "";
+      for (const ch of String(dayText || "").replace(/[^월화수목금토일]/g, "")) {
+        const startTime = pasteTime(start);
+        const endTime = pasteTime(end);
+        if (startTime && endTime) slots.push({ day: PASTE_DAYS[ch], startTime, endTime });
+      }
+    } else {
+      const re = /(?<=^|[\s,·/|(])([월화수목금토일](?:\s*[,·/]?\s*[월화수목금토일])*)\s*(\d{1,2}(?::\d{2}|시(?:\s*\d{2}분?)?)?)\s*[-~–]\s*(\d{1,2}(?::\d{2}|시(?:\s*\d{2}분?)?)?)/g;
+      let first = -1;
+      let last = 0;
+      let match;
+      while ((match = re.exec(line))) {
+        if (first < 0) first = match.index;
+        last = re.lastIndex;
+        const startTime = pasteTime(match[2].replace("분", ""));
+        const endTime = pasteTime(match[3].replace("분", ""));
+        for (const ch of match[1].replace(/[^월화수목금토일]/g, "")) {
+          if (startTime && endTime) slots.push({ day: PASTE_DAYS[ch], startTime, endTime });
+        }
+      }
+      title = (first >= 0 ? line.slice(0, first) : line).replace(/[,·|/]+\s*$/, "").trim();
+      room = first >= 0 ? line.slice(last).replace(/^[\s,·|/]+/, "").trim() : "";
+    }
+    const seen = new Set();
+    const valid = slots.filter((slot) => {
+      const key = `${slot.day}-${slot.startTime}-${slot.endTime}`;
+      if (seen.has(key) || timeToMinutes(slot.endTime) <= timeToMinutes(slot.startTime)) return false;
+      seen.add(key);
+      return true;
+    });
+    const error = !title ? "과목명이 없어요" : !valid.length ? "요일·시간을 찾지 못했어요 (예: 월 09:00-10:15)" : "";
+    const key = title.replace(/\s+/g, " ");
+    if (!error && byTitle.has(key)) {
+      const prev = byTitle.get(key);
+      prev.slots.push(...valid);
+      if (!prev.room && room) prev.room = room;
+      continue;
+    }
+    const row = { line, title, room, professor, slots: valid, error };
+    rows.push(row);
+    if (!error) byTitle.set(key, row);
+  }
+  return rows;
+}
+
+function coursePasteSlotsLabel(slots) {
+  const names = ["", "월", "화", "수", "목", "금", "토", "일"];
+  return slots.map((slot) => `${names[slot.day]} ${slot.startTime}–${slot.endTime}`).join(", ");
+}
+
+function coursePasteModalHtml() {
+  const rows = Array.isArray(ui.coursePasteRows) ? ui.coursePasteRows : null;
+  const timetableId = activeTimetableId();
+  const existing = store.coursesIn(timetableId);
+  const checked = rows
+    ? rows.map((row) => ({
+        ...row,
+        clash: !row.error && existing.some((course) => coursesOverlap(course, { slots: row.slots })),
+      }))
+    : null;
+  const okCount = checked ? checked.filter((row) => !row.error).length : 0;
+  return `<div class="modal-back" data-act="close-modal"><div class="modal course-paste" data-stop="1">
+    <h2>시간표 붙여넣기</h2>
+    <p class="page-date">한 줄에 한 과목씩 붙여 넣으세요. 학교 포털·에브리타임에서 복사한 목록도 형식이 맞으면 읽을 수 있어요.</p>
+    <form class="stack" data-act="preview-course-paste">
+      <textarea class="field course-paste-input" name="text" rows="6" placeholder="경영통계학 월 09:00-10:15 목 09:00-10:15 경영관 302&#10;교육공학개론 월 13:00-14:15 사범관 210&#10;캡스톤 디자인, 수, 14:00, 16:45, 공학관 401, 김OO">${escapeHtml(ui.coursePasteText || "")}</textarea>
+      <button class="ghost" type="submit">미리보기</button>
+    </form>
+    ${
+      checked
+        ? `<div class="list course-paste-preview">
+            ${
+              checked.length
+                ? checked
+                    .map(
+                      (row) => `<div class="task course-paste-row ${row.error ? "bad" : ""}">
+                        <span class="page-glyph" style="background:${row.error ? "var(--danger)" : "var(--ok)"}">${icon(row.error ? "x" : "check", 12)}</span>
+                        <div>
+                          <div class="task-title">${escapeHtml(row.title || row.line)}</div>
+                          <div class="task-meta">${escapeHtml(row.error || [coursePasteSlotsLabel(row.slots), row.room, row.professor].filter(Boolean).join(" · "))}${row.clash ? " · 기존 수업과 시간이 겹쳐요" : ""}</div>
+                        </div>
+                      </div>`,
+                    )
+                    .join("")
+                : `<div class="empty">읽을 수 있는 줄이 없어요.</div>`
+            }
+          </div>
+          <div class="row-actions">
+            <button class="primary" type="button" data-act="confirm-course-paste" ${okCount ? "" : "disabled"}>${okCount}개 과목 추가</button>
+            <button class="ghost" type="button" data-act="close-modal">취소</button>
+          </div>
+          <p class="page-date">확인 전에는 시간표에 아무것도 저장되지 않아요. 오류가 있는 줄은 건너뜁니다.</p>`
+        : ""
+    }
+  </div></div>`;
+}
+
 function viewTimetable() {
   const tab = ui.timetableTab === "gpa" ? "gpa" : "grid";
   const extra =
     tab === "grid"
-      ? `<button class="primary" data-act="open-course">${icon("plus", 14)} 수업 추가</button>`
+      ? `<button class="ghost" data-act="open-course-paste">${icon("paperclip", 14)} 붙여넣기로 추가</button><button class="primary" data-act="open-course">${icon("plus", 14)} 수업 추가</button>`
       : "";
   return `
-    ${top("시간표", tab === "gpa" ? "학기별 성적을 직접 입력" : "과목명 · 시간 · 강의실을 직접 입력", extra)}
+    ${top("시간표 · 성적", tab === "gpa" ? "시간표와 같은 학기의 성적을 직접 입력합니다" : "과목명 · 시간 · 강의실을 직접 입력", extra)}
     <div class="gpa-tabs">
       <button type="button" class="gpa-tab ${tab === "grid" ? "on" : ""}" data-act="tt-tab" data-tab="grid">주간 시간표</button>
       <button type="button" class="gpa-tab ${tab === "gpa" ? "on" : ""}" data-act="tt-tab" data-tab="gpa">학점 계산기</button>
@@ -1623,7 +2077,7 @@ function gpaSimResultHtml(earned) {
 
 function gpaSimulatorHtml(filter, earned) {
   if (!filter) {
-    return `<p class="page-date">학기를 고르면 이번 학기 남은 학점으로 목표 평점을 역산할 수 있습니다.</p>`;
+    return `<p class="page-date">학기를 고르면 이미 입력한 성적에 남은 학점을 더해 목표 평점에 필요한 평균을 계산합니다.</p>`;
   }
   return `
     <form class="gpa-sim" data-act="gpa-sim">
@@ -2452,22 +2906,20 @@ function noteToolbar() {
     <div class="note-bar note-ribbon" data-note-chrome data-note-bar>
       <button type="button" data-act="note-undo" title="실행취소">${icon("undo", 18)}</button>
       <button type="button" data-act="note-redo" title="다시실행">${icon("redo", 18)}</button>
-      <span class="note-bar-sep" aria-hidden="true"></span>
-      <select class="note-bar-select" data-act="note-style-select" title="문단 스타일" aria-label="문단 스타일">
-        ${NOTE_PARA_STYLES.map(
-          (item) =>
-            `<option value="${item.type}" ${item.type === styleValue ? "selected" : ""}>${escapeHtml(item.label)}</option>`,
-        ).join("")}
-      </select>
-      <span class="note-bar-sep" aria-hidden="true"></span>
-      <button type="button" data-act="note-mark" data-cmd="bold" title="굵게">${icon("bold", 16)}</button>
-      <button type="button" data-act="note-mark" data-cmd="italic" title="기울임">${icon("italic", 16)}</button>
-      <button type="button" class="${type === "checklist" ? "on" : ""}" data-act="note-check" title="체크리스트">${icon("checklist", 18)}</button>
-      <button type="button" class="${type === "bullet" ? "on" : ""}" data-act="note-style" data-type="bullet" title="글머리 기호">${icon("list", 18)}</button>
-      <button type="button" class="${type === "numbered" ? "on" : ""}" data-act="note-style" data-type="numbered" title="번호 목록">1.</button>
+      <button type="button" data-act="note-mark" data-cmd="bold" title="굵게" aria-label="굵게">${icon("bold", 16)}</button>
+      <button type="button" class="${type === "bullet" || type === "numbered" ? "on" : ""}" data-act="note-style" data-type="bullet" title="목록" aria-label="목록">${icon("list", 18)}</button>
+      <button type="button" class="${type === "checklist" ? "on" : ""}" data-act="note-check" title="체크리스트" aria-label="체크리스트">${icon("checklist", 18)}</button>
+      <button type="button" data-act="note-link" title="링크" aria-label="링크">${icon("link", 18)}</button>
+      <button type="button" data-act="note-file" title="파일" aria-label="파일">${icon("paperclip", 18)}</button>
       <div class="note-more-wrap">
-        <button type="button" class="${ui.noteMoreOpen ? "on" : ""}" data-act="note-more-toggle" title="더보기" aria-expanded="${ui.noteMoreOpen ? "true" : "false"}">${icon("moreHorizontal", 18)}</button>
+        <button type="button" class="${ui.noteMoreOpen ? "on" : ""}" data-act="note-more-toggle" title="더보기" aria-label="더보기" aria-expanded="${ui.noteMoreOpen ? "true" : "false"}">${icon("moreHorizontal", 18)}</button>
         <div class="note-more-pop ${ui.noteMoreOpen ? "open" : ""}">
+          <select class="note-bar-select" data-act="note-style-select" title="문단 스타일" aria-label="문단 스타일">
+            ${NOTE_PARA_STYLES.map(
+              (item) =>
+                `<option value="${item.type}" ${item.type === styleValue ? "selected" : ""}>${escapeHtml(item.label)}</option>`,
+            ).join("")}
+          </select>
           <button type="button" class="${ui.findOpen ? "on" : ""}" data-act="note-find" title="찾기">${icon("search", 18)}</button>
           <select class="note-bar-select note-bar-font" data-act="note-font-select" title="글꼴" aria-label="글꼴">
             ${fonts
@@ -2502,7 +2954,8 @@ function noteToolbar() {
               ).join("")}
             </div>
           </div>
-          <button type="button" data-act="note-link" title="링크">${icon("link", 18)}</button>
+          <button type="button" data-act="note-mark" data-cmd="italic" title="기울임">${icon("italic", 16)}</button>
+          <button type="button" class="${type === "numbered" ? "on" : ""}" data-act="note-style" data-type="numbered" title="번호 목록">1.</button>
           <button type="button" data-act="note-photo" title="이미지 삽입">${icon("camera", 18)}</button>
           <button type="button" data-act="note-pdf" title="PDF 삽입">${icon("pdf", 18)}</button>
           <button type="button" data-act="note-mark" data-cmd="justifyLeft" title="왼쪽 정렬">${icon("alignLeft", 16)}</button>
@@ -2519,7 +2972,6 @@ function noteToolbar() {
           <button type="button" data-act="note-indent" title="들여쓰기">${icon("indent", 18)}</button>
           <button type="button" data-act="note-clear-format" title="서식 지우기">${icon("removeFormat", 16)}</button>
           <button type="button" class="${type === "table" ? "on" : ""}" data-act="note-table" title="표">${icon("table", 18)}</button>
-          <button type="button" data-act="note-file" title="파일">${icon("paperclip", 18)}</button>
           <div class="note-color-wrap">
             <button type="button" class="${ui.emojiOpen ? "on" : ""}" data-act="note-emoji-toggle" title="이모지">${icon("emoji", 18)}</button>
             <div class="note-emoji-pop ${ui.emojiOpen ? "open" : ""}">
@@ -2669,6 +3121,11 @@ function folderPaneHtml(page, scope, parentAttr) {
           : ""
       }
       <label class="note-search">${icon("search", 14)}<input data-act="note-query" value="${escapeHtml(ui.noteQuery)}" placeholder="폴더와 페이지 검색"></label>
+      ${
+        scope && !page
+          ? `<p class="page-date">공유 문서나 PDF를 만들면 팀플 멤버가 같은 내용을 봅니다. PDF 원본 파일은 올린 기기에만 남습니다.</p>`
+          : ""
+      }
       <div class="folder-actions">
         <button class="ghost" data-act="new-folder" ${parent} ${group}>${icon("folder", 14)} 새 폴더</button>
         <button class="primary" data-act="new-page" ${parent} ${group}>${icon("plus", 14)} 새 페이지</button>
@@ -2680,19 +3137,47 @@ function folderPaneHtml(page, scope, parentAttr) {
 const PDF_INK_COLORS = ["#111827", "#dc2626", "#2563eb", "#16a34a", "#ca8a04"];
 const PDF_INK_WIDTHS = [2, 3.5, 6];
 
+function pdfAiSummaryHtml(page) {
+  if (!page.pdfUri) {
+    return `<p class="page-date">이 기기에 PDF 파일이 없어서 AI 기능을 쓸 수 없어요</p>`;
+  }
+  const summary = page.aiSummary?.summary || "";
+  const points = Array.isArray(page.aiSummary?.keyPoints) ? page.aiSummary.keyPoints : [];
+  const busy = Boolean(ui.pdfAiBusy);
+  if (busy) {
+    return `<p class="page-date">요약 만드는 중...</p>
+      <button type="button" class="primary" data-act="pdf-ai-summarize" data-id="${page.id}" disabled>요약 만드는 중...</button>`;
+  }
+  if (summary || points.length) {
+    return `
+      <p class="pdf-ai-summary">${escapeHtml(summary)}</p>
+      ${
+        points.length
+          ? `<ul class="pdf-ai-points">${points.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
+          : ""
+      }
+      <button type="button" class="ghost" data-act="pdf-ai-summarize" data-id="${page.id}">다시 생성</button>`;
+  }
+  return `<button type="button" class="primary" data-act="pdf-ai-summarize" data-id="${page.id}">AI 요약 생성</button>`;
+}
+
 function pdfViewerHtml(page, scope) {
   const n = Math.max(1, Number(page.pdfPage) || 1);
   const zoom = Math.round((Number(ui.pdfZoom) || 1) * 100);
   const ink = ui.pdfInk || { mode: "off", color: "#111827", width: 3.5 };
   const notesOpen = Boolean(ui.pdfNotesOpen);
+  const aiOpen = Boolean(ui.pdfAiOpen);
+  const sideOpen = notesOpen || aiOpen;
+  const tab = ui.pdfAiTab === "quiz" || ui.pdfAiTab === "ask" ? ui.pdfAiTab : "summary";
   return `
-    <div class="pdf-view ${notesOpen ? "notes-open" : ""}">
+    <div class="pdf-view ${sideOpen ? "notes-open" : ""}">
       ${noteCrumbsHtml(page, scope)}
       <div class="folder-head pdf-head">
         <input class="page-name folder-name" data-act="rename-page" data-id="${page.id}" value="${escapeHtml(page.name)}" placeholder="제목">
         <button type="button" class="ghost pdf-notes-toggle ${notesOpen ? "on" : ""}" data-act="toggle-pdf-notes" aria-expanded="${notesOpen ? "true" : "false"}" aria-controls="pdf-notes-panel">${icon("comment", 16)} 메모</button>
+        <button type="button" class="ghost pdf-notes-toggle ${aiOpen ? "on" : ""}" data-act="toggle-pdf-ai" aria-expanded="${aiOpen ? "true" : "false"}" aria-controls="pdf-ai-panel">✨ AI 학습</button>
       </div>
-      <div class="pdf-workspace ${notesOpen ? "notes-open" : ""}">
+      <div class="pdf-workspace ${sideOpen ? "notes-open" : ""} ${aiOpen ? "ai-open" : ""}">
       <div class="pdf-viewer ${ink.mode !== "off" ? "inking" : ""}" data-pdf-viewer data-id="${page.id}">
         <aside class="pdf-thumbs" data-pdf-thumbs aria-label="페이지 목록"></aside>
         <section class="pdf-stage">
@@ -2745,6 +3230,18 @@ function pdfViewerHtml(page, scope) {
         </div>
         <textarea class="field pdf-notes-input" data-act="pdf-notes" data-id="${page.id}" placeholder="요약, 질문, 할 말을 적어 두세요">${escapeHtml(page.pdfNotes || "")}</textarea>
       </aside>
+      <aside class="pdf-notes pdf-ai" id="pdf-ai-panel" ${aiOpen ? "" : "hidden"}>
+        <div class="pdf-notes-head">
+          <b>AI 학습</b>
+          <span>이 기기 PDF를 바탕으로 요약을 만듭니다</span>
+        </div>
+        <div class="gpa-tabs">
+          <button type="button" class="gpa-tab ${tab === "summary" ? "on" : ""}" data-act="pdf-ai-tab" data-tab="summary">요약</button>
+          <button type="button" class="gpa-tab ${tab === "quiz" ? "on" : ""}" data-act="pdf-ai-tab" data-tab="quiz">퀴즈</button>
+          <button type="button" class="gpa-tab ${tab === "ask" ? "on" : ""}" data-act="pdf-ai-tab" data-tab="ask">튜터</button>
+        </div>
+        ${tab === "summary" ? pdfAiSummaryHtml(page) : `<p class="page-date">이 탭은 아직 준비 중입니다.</p>`}
+      </aside>
       </div>
     </div>`;
 }
@@ -2766,21 +3263,41 @@ function projectWorkspaceHtml(page, { desk = false, scope = null, showTop = true
   const parentAttr = creationParentId(page) || "";
   const extras = projectPageExtras(page, { parentAttr, groupId: scope || "" });
   const browsingFolder = !page || isFolderItem(page);
-  const projectTop = (sub) => (desk || !showTop ? "" : top("프로젝트", sub, extras, { titleAct: "open-projects-root" }));
+  const shared = Boolean(scope || page?.groupId);
+  const title = shared ? "팀플 자료" : "내 자료";
+  const projectTop = (sub) => (desk || !showTop ? "" : top(title, sub, extras, { titleAct: "open-projects-root" }));
+  const shareBanner = shared
+    ? `<div class="share-banner"><b>팀플 멤버에게 공유되는 자료입니다</b><span data-page-save="${page?.id || ""}">${pageSaveLabel(ui.pageSave[page?.id] || "")}</span></div>`
+    : "";
+  const editorMeta = page
+    ? `<div class="note-stamp">${page.updatedByName ? `${escapeHtml(page.updatedByName)} · ` : ""}${noteStamp(page.updatedAt || page.createdAt)}${shared ? ` · ${pageSaveLabel(ui.pageSave[page.id] || "저장됨") || "저장됨"}` : ""}</div>`
+    : "";
   if (browsingFolder) {
     return `
-    ${projectTop("폴더에 페이지를 모아 둡니다.")}
+    ${projectTop(shared ? "팀플에서 함께 보는 문서와 PDF입니다." : "폴더에 페이지를 모아 둡니다.")}
+    ${shareBanner}
     ${folderPaneHtml(page, scope, parentAttr)}`;
   }
   if (isPdfItem(page)) {
+    const pdfNote = shared
+      ? `<p class="page-date">PDF 파일 자체는 이 기기에만 있습니다. 메모와 주석만 팀플에 공유됩니다.</p>`
+      : "";
     return `
-    ${projectTop("PDF를 페이지로 열람합니다.")}
-    ${pdfViewerHtml(page, scope)}`;
+    ${projectTop(shared ? "주석과 메모는 공유됩니다." : "PDF를 페이지로 열람합니다.")}
+    ${shareBanner}
+    ${pdfNote}
+    ${!page.pdfUri ? `<div class="empty"><b>이 기기에는 PDF 파일이 없습니다</b><p>올린 사람만 원본을 볼 수 있습니다. 공유되는 것은 메모와 주석입니다.</p></div>` : ""}
+    ${pdfViewerHtml(page, scope)}
+    ${editorMeta}`;
   }
   const blocks = page.blocks || [];
+  if (shared && !store.getState().groups.some((group) => group.id === page.groupId)) {
+    return `${projectTop("접근권한 없음")}<div class="empty"><b>접근권한 없음</b><p>이 팀플 자료는 더 이상 볼 수 없습니다.</p></div>`;
+  }
   return `
-    ${projectTop("체크리스트 · 서식 · 표 · 파일")}
-    <div class="ws notes editing ${ui.docTabsCollapsed ? "rail-collapsed" : ""}">
+    ${projectTop(shared ? "팀플 멤버와 같은 문서를 봅니다." : "체크리스트 · 목록 · 링크")}
+    ${shareBanner}
+    <div class="ws notes editing ${ui.docTabsCollapsed || (page.tabs || []).length < 2 ? "rail-collapsed" : ""}">
       ${docTabsRailHtml(page)}
       <div class="note-pane">
         ${noteCrumbsHtml(page, scope)}
@@ -2789,8 +3306,13 @@ function projectWorkspaceHtml(page, { desk = false, scope = null, showTop = true
         <div class="editor note-editor note-doc">
           <div class="note-head">
             <input class="page-name" data-act="rename-page" data-id="${page.id}" value="${escapeHtml(page.name)}" placeholder="제목">
+            ${
+              shared
+                ? `<input class="field" data-act="page-course-label" data-id="${page.id}" value="${escapeHtml(page.courseLabel || "")}" placeholder="과목 태그 (선택)">`
+                : courseSelectHtml("pageCourse", page.courseId || "")
+            }
           </div>
-          <div class="note-stamp">${noteStamp(page.updatedAt || page.createdAt)}</div>
+          ${editorMeta}
           ${blocks.map((block, i) => renderBlock(block, i, blocks)).join("")}
         </div>
       </div>
@@ -2817,6 +3339,11 @@ function viewGroups(groupId) {
   const mine = s.groups.filter((group) => uid && (group.memberIds || []).includes(uid));
   const group = mine.find((item) => item.id === groupId);
   if (!group) {
+    if (groupId) {
+      return `
+        ${top("팀플", "접근권한 없음")}
+        <div class="empty"><b>이 팀플에 접근할 수 없습니다</b><p>탈퇴했거나 초대되지 않은 그룹의 자료는 볼 수 없습니다.</p><a class="primary" href="#/groups">팀플 목록</a></div>`;
+    }
     return `
       ${top("팀플", "팀플 그룹 · 초대 코드로 최대 8명", `<button class="ghost" data-act="join-group">참여</button><button class="primary" data-act="new-group">그룹 만들기</button>`)}
       <div class="list">
@@ -2846,17 +3373,83 @@ function viewGroups(groupId) {
     ${top(group.name, `팀플 그룹 · 초대 코드 ${group.inviteCode}`, extras)}
     <div class="gpa-tabs">
       <button type="button" class="gpa-tab ${tab === "tasks" ? "on" : ""}" data-act="group-tab" data-tab="tasks" data-group="${group.id}">할 일</button>
-      <button type="button" class="gpa-tab ${tab === "projects" ? "on" : ""}" data-act="group-tab" data-tab="projects" data-group="${group.id}">프로젝트</button>
+      <button type="button" class="gpa-tab ${tab === "links" || tab === "projects" ? "on" : ""}" data-act="group-tab" data-tab="links" data-group="${group.id}">링크</button>
       <button type="button" class="gpa-tab ${tab === "schedule" ? "on" : ""}" data-act="group-tab" data-tab="schedule" data-group="${group.id}">일정</button>
     </div>
-    ${tab === "projects" ? viewGroupProjects(group, scopedPage) : tab === "schedule" ? viewGroupSchedule(group) : viewGroupTasks(group)}`;
+    ${
+      tab === "projects"
+        ? viewGroupProjects(group, scopedPage)
+        : tab === "links"
+          ? viewGroupLinks(group)
+          : tab === "schedule"
+            ? viewGroupSchedule(group)
+            : viewGroupTasks(group)
+    }`;
+}
+
+function groupTaskBundleRows(group) {
+  const tasks = store.tasksInGroup(group.id);
+  const memberNames = (group.memberIds || []).map((id) => memberLabel(id));
+  const bundles = new Map();
+  const singles = [];
+  for (const task of tasks) {
+    if (task.assignmentGroupId) {
+      if (!bundles.has(task.assignmentGroupId)) bundles.set(task.assignmentGroupId, []);
+      bundles.get(task.assignmentGroupId).push(task);
+    } else {
+      singles.push(task);
+    }
+  }
+  const rows = [];
+  for (const [batchId, items] of bundles) {
+    const done = items.filter((item) => item.status === "completed").length;
+    const names = items.map((item) => {
+      const ok = item.status === "completed";
+      return `${item.assigneeName || "멤버"}${ok ? " ✓" : ""}`;
+    });
+    const overdue = items.some((item) => item.dueDate && item.dueDate < todayKey() && item.status !== "completed");
+    const allDone = items.length > 0 && done === items.length;
+    const open = ui.openTaskMenu === batchId;
+    rows.push(`
+      <article class="task group-bundle ${allDone ? "done" : ""} ${overdue ? "overdue" : ""}">
+        <div class="task-body">
+          <div class="task-title">${escapeHtml(items[0].title)}${allDone ? `<span class="sub-chip">전체 완료</span>` : ""}</div>
+          <div class="task-meta">전체 담당 · ${done}/${items.length}명 완료${overdue ? " · 마감 지남" : ""}</div>
+          <div class="task-meta">${names.map(escapeHtml).join(" · ")}</div>
+        </div>
+        <div class="task-menu-wrap">
+          <button class="icon-btn" data-act="task-menu" data-id="${batchId}" aria-label="공통 할 일 메뉴">${icon("moreVertical", 14)}</button>
+          ${
+            open
+              ? `<div class="task-menu-pop">
+                  ${items
+                    .map(
+                      (item) =>
+                        `<button type="button" data-act="toggle-task" data-id="${item.id}">${escapeHtml(item.assigneeName || "멤버")} ${item.status === "completed" ? "완료 취소" : "완료"}</button>`,
+                    )
+                    .join("")}
+                </div>`
+              : ""
+          }
+        </div>
+      </article>`);
+  }
+  for (const task of singles) {
+    const mine = assigneeNameIsMe(task.assigneeName);
+    const overdue = task.dueDate && task.dueDate < todayKey() && task.status !== "completed";
+    rows.push(taskRow({ ...task, assigneeName: mine ? "내가 담당" : `${task.assigneeName || "다른 팀원"} 담당` }));
+    if (overdue) {
+      /* status shown via due chip */
+    }
+  }
+  return { rows, empty: !tasks.length, memberNames };
 }
 
 function viewGroupTasks(group) {
-  const tasks = store.tasksInGroup(group.id);
   const assignees = assigneeChoices(group);
+  const { rows, empty } = groupTaskBundleRows(group);
   return `
-    <p class="page-date">담당자의 오늘 할 일에 마감일까지 보입니다. 완료하거나 마감이 지나면 사라집니다.</p>
+    <p class="page-date">담당자의 오늘 할 일과 이번 주 마감에만 자기 업무가 보입니다. 담당자가 바뀌면 내 목록에서 사라질 수 있습니다.</p>
     <form class="gpa-form group-task-form" data-act="add-group-task">
       <input type="hidden" name="groupId" value="${group.id}">
       <input class="field" name="title" placeholder="할 일 제목" required>
@@ -2869,12 +3462,81 @@ function viewGroupTasks(group) {
       <button class="primary" type="submit">할 일 추가</button>
     </form>
     <div class="list">
-      ${tasks.length ? tasks.map((task) => taskRow(task)).join("") : `<div class="empty">아직 팀 할 일이 없습니다.</div>`}
+      ${empty ? `<div class="empty">아직 팀 할 일이 없습니다.</div>` : rows.join("")}
     </div>`;
 }
 
 function viewGroupProjects(group, page) {
-  return projectWorkspaceHtml(page || null, { desk: false, scope: group.id, showTop: false });
+  return `
+    <p class="page-date group-legacy-note">이전 팀플 자료는 보관용이에요. 새 자료는 <a href="#${groupPath(group.id, "links")}">링크</a> 탭에 Notion·Google Docs·드라이브 링크로 모아 주세요.</p>
+    ${projectWorkspaceHtml(page || null, { desk: false, scope: group.id, showTop: false })}`;
+}
+
+function linkHost(url) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
+function safeLinkUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const withScheme = /^[a-z][a-z0-9+.-]*:/i.test(raw) ? raw : `https://${raw}`;
+  try {
+    const url = new URL(withScheme);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.href : "";
+  } catch {
+    return "";
+  }
+}
+
+function viewGroupLinks(group) {
+  const links = groupLinks
+    .filter((item) => item.groupId === group.id)
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+  const legacy = store.projectsInGroup(group.id);
+  return `
+    <p class="page-date">회의록·발표자료·설문지는 쓰던 도구 그대로 두고, 링크만 여기 모아 두세요. 팀플 멤버 모두에게 보여요.</p>
+    <form class="gpa-form group-link-form" data-act="add-group-link">
+      <input type="hidden" name="groupId" value="${group.id}">
+      <input class="field" name="name" placeholder="이름 (예: 발표자료 초안)" maxlength="80" required>
+      <input class="field" name="url" placeholder="링크 (https://…)" inputmode="url" required>
+      <button class="primary" type="submit">링크 추가</button>
+    </form>
+    <div class="list group-links">
+      ${
+        links.length
+          ? links
+              .map((item) => {
+                const host = linkHost(item.url);
+                return `<div class="task group-link-row">
+                  <span class="page-glyph group-link-glyph">${icon("link", 12)}</span>
+                  <a class="group-link-main" href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">
+                    <div class="task-title">${escapeHtml(item.name || host || "링크")}</div>
+                    <div class="task-meta">${escapeHtml([host, item.updatedByName].filter(Boolean).join(" · "))}</div>
+                  </a>
+                  <button class="icon-btn" type="button" data-act="delete-group-link" data-id="${escapeHtml(item.id)}" aria-label="링크 삭제">${icon("trash", 14)}</button>
+                </div>`;
+              })
+              .join("")
+          : `<div class="empty">아직 링크가 없습니다. 팀플 자료가 있는 문서 주소를 붙여 넣어 보세요.</div>`
+      }
+    </div>
+    ${
+      legacy.length
+        ? `<div class="group-title group-legacy-title">이전 팀플 자료 (보관)</div>
+          <div class="list">
+            ${legacy
+              .map(
+                (page) =>
+                  `<a class="task" href="#${groupPath(group.id, "projects", page.id)}"><span class="page-glyph" style="background:${escapeHtml(page.color || "#94a3b8")}">${icon(page.type === "pdf" ? "pdf" : page.type === "folder" ? "folder" : "page", 12)}</span><div><div class="task-title">${escapeHtml(page.name || "제목 없음")}</div><div class="task-meta">${page.type === "pdf" ? "PDF" : page.type === "folder" ? "폴더" : "페이지"}</div></div></a>`,
+              )
+              .join("")}
+          </div>`
+        : ""
+    }`;
 }
 
 function viewGroupSchedule(group) {
@@ -2951,18 +3613,50 @@ function viewPollGrid(poll, group) {
   const rows = pollResponsesFor(poll);
   const memberCount = Math.max(1, (group.memberIds || []).length);
   const uid = auth.user()?.id;
+  const canConfirm = group.createdBy && uid && group.createdBy === uid;
+  const confirmed = poll.status === "confirmed" && poll.confirmedDate;
+  const cancelled = poll.status === "cancelled";
+  const counts = {};
+  let maxCount = 0;
+  for (const date of dates) {
+    for (const time of times) {
+      const key = `${date}-${time}`;
+      const count = rows.filter((row) => (row.slots || []).includes(key)).length;
+      counts[key] = count;
+      if (count > maxCount) maxCount = count;
+    }
+  }
   const hover = ui.pollHover?.pollId === poll.id ? ui.pollHover.slot : "";
   const hoverNames = hover
     ? rows.filter((row) => (row.slots || []).includes(hover)).map((row) => memberLabel(row.userId))
     : [];
+  const result = confirmed
+    ? `<div class="poll-result">
+        <b>확정된 시간</b>
+        <p>${escapeHtml(poll.confirmedDate)} ${escapeHtml(poll.confirmedStart || "")}–${escapeHtml(poll.confirmedEnd || "")}</p>
+        <button type="button" class="primary" data-act="go-poll-event" data-poll="${poll.id}">캘린더에서 보기</button>
+        ${
+          canConfirm
+            ? `<div class="row-actions">
+                <button type="button" class="ghost" data-act="reconfirm-poll" data-id="${poll.id}">시간 변경</button>
+                <button type="button" class="danger" data-act="unconfirm-poll" data-id="${poll.id}">확정 취소</button>
+              </div>`
+            : ""
+        }
+      </div>`
+    : cancelled
+      ? `<p class="page-date">이 약속 확정은 취소되었습니다. ${canConfirm ? "다시 시간을 확정할 수 있습니다." : ""}</p>`
+      : "";
   return `
     <article class="poll-card" data-poll-card="${poll.id}">
       <div class="sched-head poll-card-head">
         <div>
           <b>${escapeHtml(poll.title || "약속 잡기")}</b>
-          <span>${escapeHtml(poll.startTime || "09:00")}–${escapeHtml(poll.endTime || "22:00")}</span>
+          <span>${confirmed ? "확정됨" : cancelled ? "취소됨" : `${escapeHtml(poll.startTime || "09:00")}–${escapeHtml(poll.endTime || "22:00")}`}</span>
         </div>
-        <div class="poll-card-more">
+        ${
+          canConfirm
+            ? `<div class="poll-card-more">
           <button type="button" class="icon-btn ${ui.pollMenu === poll.id ? "on" : ""}" data-act="poll-menu" data-id="${poll.id}" title="약속 편집" aria-label="약속 편집" aria-expanded="${ui.pollMenu === poll.id ? "true" : "false"}">${icon("moreVertical", 16)}</button>
           ${
             ui.pollMenu === poll.id
@@ -2972,10 +3666,16 @@ function viewPollGrid(poll, group) {
                 </div>`
               : ""
           }
-        </div>
+        </div>`
+            : ""
+        }
       </div>
-      <div class="poll-grid-wrap">
-        <div class="poll-grid" style="--poll-cols:${dates.length}">
+      ${result}
+      ${
+        confirmed && ui.pollReselect !== poll.id
+          ? ""
+          : `<div class="poll-grid-wrap">
+        <div class="poll-grid" style="--poll-cols:${dates.length}" data-poll-grid="${poll.id}">
           <div class="poll-time"></div>
           ${dates.map((date) => `<div class="poll-day">${escapeHtml(pollDateLabel(date))}</div>`).join("")}
           ${times
@@ -2985,17 +3685,25 @@ function viewPollGrid(poll, group) {
                 dates
                   .map((date) => {
                     const key = `${date}-${time}`;
-                    const count = rows.filter((row) => (row.slots || []).includes(key)).length;
+                    const count = counts[key] || 0;
                     const mine = Boolean(uid && rows.some((row) => row.userId === uid && (row.slots || []).includes(key)));
+                    const best = maxCount > 0 && count === maxCount;
                     const ratio = count / memberCount;
-                    return `<button type="button" class="poll-cell ${mine ? "mine" : ""} ${ui.pollHover?.slot === key && ui.pollHover?.pollId === poll.id ? "tip" : ""}" style="--hit:${ratio}" data-act="toggle-poll-slot" data-poll="${poll.id}" data-slot="${key}" aria-pressed="${mine ? "true" : "false"}" aria-label="${escapeHtml(pollDateLabel(date))} ${time}"></button>`;
+                    return `<button type="button" class="poll-cell ${mine ? "mine" : ""} ${best ? "best" : ""} ${ui.pollHover?.slot === key && ui.pollHover?.pollId === poll.id ? "tip" : ""}" style="--hit:${ratio}" data-act="toggle-poll-slot" data-poll="${poll.id}" data-slot="${key}" aria-pressed="${mine ? "true" : "false"}" aria-label="${escapeHtml(pollDateLabel(date))} ${time}, 가능 ${count}/${memberCount}명${best ? ", 추천" : ""}${mine ? ", 내가 선택" : ""}"><span class="poll-count">${count}/${memberCount}</span>${best ? `<span class="poll-best-mark">추천</span>` : ""}</button>`;
                   })
                   .join(""),
             )
             .join("")}
         </div>
       </div>
-      <p class="poll-hint">${hoverNames.length ? `${escapeHtml(hover)} · ${hoverNames.map(escapeHtml).join(", ")}` : "칸을 누르거나 올리면 가능한 멤버가 보여요"}</p>
+      <p class="poll-hint">${hoverNames.length ? `${escapeHtml(hover)} · ${hoverNames.map(escapeHtml).join(", ")}` : "칸을 누르거나 올리면 가능한 멤버가 보여요. 내가 고른 칸은 테두리로, 추천 칸은 추천 표시로 구분됩니다."}</p>
+      ${
+        canConfirm && !confirmed
+          ? `<button type="button" class="primary" data-act="confirm-poll" data-id="${poll.id}" data-slot="${escapeHtml(ui.pollPick[poll.id] || hover || "")}">선택한 시간으로 확정</button>
+             <p class="page-date">추천 칸을 고르거나, 칸을 누른 뒤 확정하세요.</p>`
+          : ""
+      }`
+      }
     </article>`;
 }
 
@@ -3298,7 +4006,8 @@ function settingsPrivacy() {
           <small>대표로 지정한 시간표의 요일과 바쁜 시간만 공유됩니다. 과목명·강의실은 보내지 않습니다.</small>
         </span>
       </label>
-    </div>`;
+    </div>
+    <p class="page-date set-legal"><a href="/privacy.html" target="_blank" rel="noopener">개인정보처리방침 보기</a></p>`;
 }
 
 function settingsPermissions() {
@@ -3685,6 +4394,7 @@ function authGateHtml() {
           <h2>${signup ? "회원가입" : "로그인"}</h2>
           <p class="auth-panel-sub">계정으로 이 기기와 서버 기록이 맞춰집니다.</p>
           ${authFormHtml()}
+          <p class="auth-legal">${signup ? "가입하면 " : ""}<a href="/privacy.html" target="_blank" rel="noopener">개인정보처리방침</a>${signup ? "에 동의하는 것으로 봅니다." : ""}</p>
         </div>
       </section>
     </div>
@@ -3694,8 +4404,8 @@ function authGateHtml() {
 const SEARCH_GROUPS = [
   ["task", "할 일"],
   ["course", "시간표"],
-  ["group", "그룹"],
-  ["project", "프로젝트"],
+  ["group", "팀플"],
+  ["project", "자료"],
 ];
 
 function globalSearchHitsHtml(hits) {
@@ -3713,7 +4423,7 @@ function globalSearchHitsHtml(hits) {
             (item) =>
               `<button type="button" class="search-hit" data-act="go-search-hit" data-route="${escapeHtml(item.route)}" data-type="${item.type}" data-id="${item.id}" data-tt="${escapeHtml(item.timetableId || "")}">
                 <b>${escapeHtml(item.label)}</b>
-                ${item.meta ? `<span class="task-meta">${escapeHtml(item.meta)}</span>` : ""}
+                ${item.meta ? `<span class="task-meta">${item.route?.includes("/groups/") ? "팀플 · " : "개인 · "}${escapeHtml(item.meta)}</span>` : ""}
               </button>`,
           )
           .join("")}
@@ -3743,6 +4453,43 @@ function modalHtml() {
       <div class="search-hits" data-global-search-hits>${globalSearchHitsHtml(ui.searchHits)}</div>
     </div></div>`;
   }
+  if (ui.modal === "quick-add") {
+    return `<div class="modal-back" data-act="close-modal"><div class="modal" data-stop="1">
+      <h2>빠른 추가</h2>
+      <p class="page-date">할 일은 끝내야 하는 작업, 일정은 특정 시간의 약속, 수업은 매주 반복되는 강의입니다.</p>
+      <div class="choice-cards">
+        <button type="button" class="choice-card" data-act="quick-add" data-type="task"><b>할 일</b><span>끝내야 하는 작업</span></button>
+        <button type="button" class="choice-card" data-act="quick-add" data-type="event"><b>일정</b><span>특정 시간에 있는 약속</span></button>
+        <button type="button" class="choice-card" data-act="quick-add" data-type="course"><b>수업</b><span>매주 반복되는 강의</span></button>
+      </div>
+    </div></div>`;
+  }
+  if (ui.modal === "page-conflict") {
+    const page = store.projectById(ui.pageConflict?.pageId);
+    return `<div class="modal-back" data-act="close-modal"><div class="modal" data-stop="1">
+      <h2>다른 사용자의 최신 변경사항이 있습니다</h2>
+      <p class="page-date">자동으로 덮어쓰지 않습니다. 최신 버전을 불러오거나, 내 내용을 복사한 뒤 확인할 수 있습니다.</p>
+      <div class="stack">
+        <button class="primary" type="button" data-act="page-reload">최신 버전 불러오기</button>
+        <button class="ghost" type="button" data-act="page-keep-copy">내 내용을 복사하고 최신 확인</button>
+        <button class="danger" type="button" data-act="page-overwrite">내 내용으로 덮어쓰기</button>
+        <button class="ghost" type="button" data-act="close-modal">닫기</button>
+      </div>
+      ${page ? `<textarea class="field" readonly rows="6">${escapeHtml((page.blocks || []).map((block) => block.text || "").join("\n"))}</textarea>` : ""}
+    </div></div>`;
+  }
+  if (ui.modal === "event-scope") {
+    return `<div class="modal-back" data-act="close-modal"><div class="modal" data-stop="1">
+      <h2>${ui.eventScope === "delete" ? "반복 일정 삭제" : "반복 일정 수정"}</h2>
+      <p class="page-date">이 일정은 반복 일정의 일부입니다.</p>
+      <div class="stack">
+        <button class="primary" type="button" data-act="event-scope" data-scope="this">이번 일정만</button>
+        <button class="ghost" type="button" data-act="event-scope" data-scope="future">이후 일정</button>
+        <button class="ghost" type="button" data-act="event-scope" data-scope="all">전체 일정</button>
+        <button class="ghost" type="button" data-act="close-modal">취소</button>
+      </div>
+    </div></div>`;
+  }
   if (ui.modal === "event") {
     return `<div class="modal-back" data-act="close-modal"><div class="modal" data-stop="1">
       <h2>일정 추가</h2>
@@ -3760,21 +4507,34 @@ function modalHtml() {
       <h2>일정 수정</h2>
       <form class="stack" data-act="save-event">
         <input type="hidden" name="id" value="${escapeHtml(event.id)}">
-        ${eventFormFields(event)}
+        <input type="hidden" name="occurrenceDate" value="${escapeHtml(ui.eventOccurrence || event.date)}">
+        ${eventFormFields({ ...event, date: ui.eventOccurrence || event.date })}
         <button class="primary" type="submit">저장</button>
         <button class="ghost" type="button" data-act="show-event" data-id="${event.id}">취소</button>
       </form>
     </div></div>`;
   }
   if (ui.modal === "event-detail") {
-    const event = (store.getState().events || []).find((item) => item.id === ui.eventId);
+    const pollEvent = confirmedPollEvents().find((item) => item.id === ui.eventId);
+    const event = pollEvent || (store.getState().events || []).find((item) => item.id === ui.eventId);
     if (!event) return "";
+    const group = event.groupId ? store.getState().groups.find((item) => item.id === event.groupId) : null;
+    const occ = ui.eventOccurrence || event.occurrenceDate || event.date;
+    const time = event.allDay ? "하루 종일" : `${event.startTime || ""}–${event.endTime || ""}`;
+    const freqLabel = event.repeat?.freq === "weekly" ? "매주" : event.repeat?.freq === "biweekly" ? "격주" : event.repeat?.freq === "monthly" ? "매월" : "";
     return `<div class="modal-back" data-act="close-modal"><div class="modal" data-stop="1">
       <h2>${escapeHtml(event.title || "일정")}</h2>
-      <p class="modal-meta">${escapeHtml(event.date || "")} · ${escapeHtml(event.startTime || "")}–${escapeHtml(event.endTime || "")}</p>
+      <p class="modal-meta">${escapeHtml(occ || "")} · ${escapeHtml(time)}</p>
+      ${group || event.source === "poll" ? `<p class="page-date">팀플${group?.name ? ` · ${escapeHtml(group.name)}` : ""} 확정 일정</p>` : ""}
+      ${freqLabel ? `<p class="page-date">반복: ${freqLabel}${event.repeat?.until ? ` · ${event.repeat.until}까지` : ""} · 이번 일정은 반복 일정의 일부입니다</p>` : ""}
+      ${courseLabel(event.courseId) ? `<p class="page-date">과목: ${escapeHtml(courseLabel(event.courseId))}</p>` : ""}
       <div class="stack">
-        <button class="primary" type="button" data-act="edit-event" data-id="${event.id}">수정</button>
-        <button class="danger" type="button" data-act="del-event" data-id="${event.id}">삭제</button>
+        ${
+          event.source === "poll"
+            ? `<button class="primary" type="button" data-act="go-poll-event" data-poll="${event.pollId}">약속 잡기로 이동</button>`
+            : `<button class="primary" type="button" data-act="edit-event" data-id="${event.id}">수정</button>
+               <button class="ghost" type="button" data-act="ask-del-event" data-id="${event.id}">삭제</button>`
+        }
         <button class="ghost" type="button" data-act="close-modal">닫기</button>
       </div>
     </div></div>`;
@@ -3795,7 +4555,8 @@ function modalHtml() {
              .join("")}
          </select>
          <input class="field" name="scheduledDate" type="date" value="${escapeHtml(task.scheduledDate || "")}" required>
-         <label class="due-field">마감 (선택)<input class="field" name="dueDate" type="date" value="${escapeHtml(task.dueDate || "")}"></label>`;
+         <label class="due-field">마감 (선택)<input class="field" name="dueDate" type="date" value="${escapeHtml(task.dueDate || "")}"></label>
+         ${courseSelectHtml("courseId", task.courseId || "")}`;
     const subs = Array.isArray(task.subtasks) ? task.subtasks : [];
     const freq = task.repeat?.freq || "";
     return `<div class="modal-back" data-act="close-modal"><div class="modal" data-stop="1">
@@ -3842,6 +4603,7 @@ function modalHtml() {
       </form>
     </div></div>`;
   }
+  if (ui.modal === "course-paste") return coursePasteModalHtml();
   if (ui.modal === "course") {
     const course = store.courseById(ui.courseId);
     const tiles = courseColorTiles();
@@ -3955,7 +4717,7 @@ function modalHtml() {
     return `<div class="modal-back" data-act="close-modal"><div class="modal" data-stop="1">
       <h2>계정을 삭제할까요?</h2>
       <p class="delete-warn">이 작업은 되돌릴 수 없습니다.</p>
-      <p class="page-date">할 일, 시간표, 성적, 그룹 참여 정보와 로그인 계정이 모두 삭제됩니다. 확인을 위해 ${email ? `<b>${escapeHtml(email)}</b>` : "가입한 이메일"}을 다시 입력하세요.</p>
+      <p class="page-date">개인 할 일, 시간표, 성적, 내 자료와 로그인 계정이 삭제됩니다. 혼자 남은 팀플의 공유 자료는 함께 삭제되고, 다른 멤버가 있는 팀플 자료는 남습니다. 확인을 위해 ${email ? `<b>${escapeHtml(email)}</b>` : "가입한 이메일"}을 다시 입력하세요.</p>
       <form class="stack" data-act="confirm-delete-account">
         <input class="field" name="email" type="email" placeholder="이메일 재입력" required autocomplete="off" ${ui.deletingAccount ? "disabled" : ""}>
         <button class="danger" type="submit" ${ui.deletingAccount ? "disabled" : ""}>${ui.deletingAccount ? "삭제 중…" : "계정 영구 삭제"}</button>
@@ -4020,6 +4782,7 @@ function layout(active, body, desk = false) {
       <main class="main">${body}</main>
     </div>
     ${bottomNavHtml(active)}
+    <button type="button" class="quick-fab" data-act="open-quick-add" aria-label="빠른 추가">${icon("plus", 20)}</button>
     ${modalHtml()}`;
 }
 
@@ -4281,6 +5044,7 @@ function togglePollSlot(pollId, slot) {
   const next = [...current];
   ui.pollDrafts = { ...ui.pollDrafts, [pollId]: next };
   ui.pollHover = { pollId, slot };
+  ui.pollPick = { ...ui.pollPick, [pollId]: slot };
   render();
   const seq = (pollSaveSeq[pollId] = (pollSaveSeq[pollId] || 0) + 1);
   auth
@@ -5225,16 +5989,25 @@ function syncPdfInkChrome(host) {
 function syncPdfNotesChrome() {
   const view = document.querySelector(".pdf-view");
   if (!view) return;
-  const open = Boolean(ui.pdfNotesOpen);
+  const notesOpen = Boolean(ui.pdfNotesOpen);
+  const aiOpen = Boolean(ui.pdfAiOpen);
   const workspace = view.querySelector(".pdf-workspace");
   const panel = view.querySelector("[data-pdf-notes]");
   const btn = view.querySelector("[data-act='toggle-pdf-notes']");
-  view.classList.toggle("notes-open", open);
-  workspace?.classList.toggle("notes-open", open);
-  if (panel) panel.hidden = !open;
+  const aiPanel = view.querySelector("#pdf-ai-panel");
+  const aiBtn = view.querySelector("[data-act='toggle-pdf-ai']");
+  view.classList.toggle("notes-open", notesOpen || aiOpen);
+  workspace?.classList.toggle("notes-open", notesOpen || aiOpen);
+  workspace?.classList.toggle("ai-open", aiOpen);
+  if (panel) panel.hidden = !notesOpen;
+  if (aiPanel) aiPanel.hidden = !aiOpen;
   if (btn) {
-    btn.classList.toggle("on", open);
-    btn.setAttribute("aria-expanded", String(open));
+    btn.classList.toggle("on", notesOpen);
+    btn.setAttribute("aria-expanded", String(notesOpen));
+  }
+  if (aiBtn) {
+    aiBtn.classList.toggle("on", aiOpen);
+    aiBtn.setAttribute("aria-expanded", String(aiOpen));
   }
 }
 
@@ -5621,15 +6394,60 @@ function onClick(event) {
     const [y, m, d] = actEl.dataset.key.split("-").map(Number);
     ui.date = new Date(y, m - 1, d);
     maybeMaterializeToday();
-  } else if (act === "del-event") {
-    store.deleteEvent(id);
-    if (ui.modal === "event-detail") {
+  } else if (act === "ask-del-event") {
+    const event = (store.getState().events || []).find((item) => item.id === id);
+    ui.eventId = id;
+    if (event?.repeat?.freq) {
+      ui.eventScope = "delete";
+      ui.eventOccurrence = actEl.dataset.occ || ui.eventOccurrence || event.date;
+      ui.modal = "event-scope";
+    } else if (confirm("이 일정을 삭제할까요?")) {
+      store.deleteEvent(id);
       ui.modal = null;
       ui.eventId = null;
     }
+  } else if (act === "del-event") {
+    const event = (store.getState().events || []).find((item) => item.id === id);
+    if (event?.repeat?.freq) {
+      ui.eventId = id;
+      ui.eventScope = "delete";
+      ui.eventOccurrence = actEl.dataset.occ || ui.eventOccurrence || event.date;
+      ui.modal = "event-scope";
+    } else {
+      store.deleteEvent(id);
+      if (ui.modal === "event-detail") {
+        ui.modal = null;
+        ui.eventId = null;
+      }
+    }
   } else if (act === "show-event") {
     ui.eventId = id;
+    ui.eventOccurrence = actEl.dataset.occ || "";
     ui.modal = "event-detail";
+  } else if (act === "open-course-paste") {
+    ui.coursePasteText = "";
+    ui.coursePasteRows = null;
+    ui.modal = "course-paste";
+  } else if (act === "confirm-course-paste") {
+    const rows = (ui.coursePasteRows || []).filter((row) => !row.error);
+    const timetableId = activeTimetableId();
+    rows.forEach((row, idx) => {
+      store.addCourse(
+        {
+          title: row.title,
+          room: row.room,
+          professor: row.professor,
+          color: PASTE_COLORS[idx % PASTE_COLORS.length],
+          slots: row.slots,
+        },
+        timetableId,
+      );
+    });
+    ui.modal = null;
+    ui.coursePasteRows = null;
+    ui.coursePasteText = "";
+    ui.toast = { title: "시간표", body: `${rows.length}개 과목을 추가했어요` };
+    maybeSyncTimetable();
   } else if (act === "open-course") {
     ui.courseId = null;
     ui.courseSlotsDraft = [defaultCourseSlot()];
@@ -5800,6 +6618,57 @@ function onClick(event) {
     if (ui.pdfNotesOpen) {
       requestAnimationFrame(() => document.querySelector("[data-act='pdf-notes']")?.focus());
     }
+    return;
+  } else if (act === "toggle-pdf-ai") {
+    ui.pdfAiOpen = !ui.pdfAiOpen;
+    syncPdfNotesChrome();
+    if (ui.pdfAiOpen) {
+      requestAnimationFrame(() => document.querySelector("#pdf-ai-panel .gpa-tab, #pdf-ai-panel button")?.focus());
+    }
+    return;
+  } else if (act === "pdf-ai-tab") {
+    ui.pdfAiTab = actEl.dataset.tab === "quiz" || actEl.dataset.tab === "ask" ? actEl.dataset.tab : "summary";
+    render();
+    return;
+  } else if (act === "pdf-ai-summarize") {
+    if (ui.pdfAiBusy) return;
+    const page = store.projectById(id);
+    if (!page?.pdfUri) {
+      alert("이 기기에 PDF 파일이 없어서 AI 기능을 쓸 수 없어요");
+      return;
+    }
+    const comma = String(page.pdfUri).indexOf(",");
+    const base64 = comma >= 0 ? String(page.pdfUri).slice(comma + 1) : "";
+    if (!base64) {
+      alert("PDF 요약에 실패했어요. 다시 시도해 주세요.");
+      return;
+    }
+    if (Math.floor((base64.length * 3) / 4) > 15 * 1024 * 1024) {
+      alert("PDF가 너무 커서 요약할 수 없어요.");
+      return;
+    }
+    ui.pdfAiBusy = true;
+    ui.pdfAiOpen = true;
+    ui.pdfAiTab = "summary";
+    render();
+    auth
+      .askCoach({ action: "pdf-summarize", pageId: page.id, pdfBase64: base64 })
+      .then((data) => {
+        store.updatePage(page.id, {
+          aiSummary: {
+            summary: String(data?.summary || ""),
+            keyPoints: Array.isArray(data?.keyPoints) ? data.keyPoints.map((item) => String(item || "")).filter(Boolean).slice(0, 5) : [],
+            generatedAt: Date.now(),
+          },
+        });
+      })
+      .catch(() => {
+        alert("PDF 요약에 실패했어요. 다시 시도해 주세요.");
+      })
+      .finally(() => {
+        ui.pdfAiBusy = false;
+        render();
+      });
     return;
   } else if (act === "pdf-ink") {
     const ink = pdfInkState();
@@ -6232,6 +7101,21 @@ function onClick(event) {
     applyPlainTheme(color);
   } else if (act === "del-theme-preset") {
     store.removeThemePreset(actEl.dataset.color);
+  } else if (act === "delete-group-link") {
+    const removed = groupLinks.find((item) => item.id === id);
+    if (!removed) return;
+    if (!confirm("이 링크를 팀플에서 지울까요? 원본 문서는 지워지지 않아요.")) return;
+    groupLinks = groupLinks.filter((item) => item.id !== id);
+    render();
+    auth
+      .deleteGroupPage(id)
+      .then(() => refreshGroupBundle())
+      .catch(() => {
+        groupLinks = [removed, ...groupLinks];
+        alert("링크를 지우지 못했어요. 다시 시도해 주세요.");
+        render();
+      });
+    return;
   } else if (act === "group-tab") {
     const tab = GROUP_TABS.includes(actEl.dataset.tab) ? actEl.dataset.tab : "tasks";
     const groupId = actEl.dataset.group || groupRoute()?.groupId || parseHash().id;
@@ -6359,10 +7243,138 @@ function onClick(event) {
     applyCalc(actEl.dataset.key);
   } else if (act === "open-event") {
     ui.eventId = null;
+    ui.eventEndTouched = false;
+    ui.eventDraft = null;
     ui.modal = "event";
   } else if (act === "edit-event") {
     ui.eventId = id || ui.eventId;
+    ui.eventEndTouched = true;
     ui.modal = "event-edit";
+  } else if (act === "open-quick-add") {
+    ui.modal = "quick-add";
+  } else if (act === "quick-add") {
+    const type = actEl.dataset.type;
+    ui.modal = null;
+    if (type === "task") {
+      go("/today");
+      ui.addingCategory = store.getState().categories[0]?.id || "school";
+    } else if (type === "event") {
+      ui.eventId = null;
+      ui.eventEndTouched = false;
+      ui.modal = "event";
+    } else if (type === "course") {
+      ui.courseId = null;
+      ui.courseSlotsDraft = [defaultCourseSlot()];
+      ui.courseColorDraft = store.getState().categories[0]?.color || "#0EA5E9";
+      ui.courseFormDraft = { title: "", professor: "", room: "", memo: "" };
+      ui.courseDeleteConfirm = false;
+      ui.modal = "course";
+    }
+  } else if (act === "event-scope") {
+    const scope = actEl.dataset.scope;
+    const occ = ui.eventOccurrence;
+    if (ui.eventScope === "delete") {
+      store.deleteEvent(ui.eventId, scope, occ);
+    } else if (ui.eventDraft) {
+      store.updateEvent(ui.eventId, ui.eventDraft, scope, occ);
+    }
+    ui.modal = null;
+    ui.eventId = null;
+    ui.eventDraft = null;
+    ui.eventScope = "";
+  } else if (act === "toggle-all-day") {
+    const box = actEl;
+    document.querySelectorAll(".event-times, .event-durations").forEach((el) => el.classList.toggle("is-hidden", box.checked));
+    return;
+  } else if (act === "event-duration") {
+    const form = actEl.closest("form");
+    const startField = form?.querySelector("[data-time-field]:has([name='startTime'])") || form?.querySelectorAll("[data-time-field]")[0];
+    const endField = form?.querySelectorAll("[data-time-field]")[1];
+    const start = startField ? syncTimeField(startField) : "09:00";
+    const next = minutesToClock(timeToMinutes(start) + Number(actEl.dataset.min || 60));
+    if (endField) {
+      const hidden = endField.querySelector('input[type="hidden"]');
+      if (hidden) hidden.value = next;
+      const parts = clockParts(next);
+      const hourEl = endField.querySelector("[data-act='time-hour']");
+      const minuteEl = endField.querySelector("[data-act='time-minute']");
+      const ampmEl = endField.querySelector("[data-act='toggle-ampm']");
+      if (hourEl) hourEl.value = parts.hour12;
+      if (minuteEl) minuteEl.value = String(parts.minutes).padStart(2, "0");
+      if (ampmEl) {
+        ampmEl.classList.toggle("pm", parts.isPm);
+        ampmEl.setAttribute("aria-pressed", parts.isPm ? "true" : "false");
+        ampmEl.textContent = parts.isPm ? "오후" : "오전";
+      }
+    }
+    ui.eventEndTouched = true;
+    return;
+  } else if (act === "page-reload") {
+    const remote = ui.pageConflict?.page;
+    if (remote) {
+      const local = store.projectById(remote.id);
+      store.applyServerPage({ ...remote, pdfUri: local?.pdfUri || "" });
+      setPageSave(remote.id, "saved");
+    }
+    ui.pageConflict = null;
+    ui.modal = null;
+  } else if (act === "page-keep-copy") {
+    const local = store.projectById(ui.pageConflict?.pageId);
+    const text = (local?.blocks || []).map((block) => block.text || "").join("\n");
+    navigator.clipboard?.writeText(text).catch(() => {});
+    const remote = ui.pageConflict?.page;
+    if (remote) store.applyServerPage({ ...remote, pdfUri: local?.pdfUri || "" });
+    ui.toast = { title: "내 내용 복사", body: "클립보드에 복사한 뒤 최신 버전을 열었습니다." };
+    ui.pageConflict = null;
+    ui.modal = null;
+  } else if (act === "page-overwrite") {
+    const pageId = ui.pageConflict?.pageId;
+    ui.modal = null;
+    if (pageId) saveGroupPageNow(pageId, { overwrite: true });
+  } else if (act === "confirm-poll") {
+    const pollId = id;
+    const slot = actEl.dataset.slot || ui.pollPick[pollId] || ui.pollHover?.slot || "";
+    if (!slot) {
+      ui.toast = { title: "약속 확정", body: "확정할 시간을 먼저 선택하세요." };
+    } else {
+      auth
+        .confirmPoll(pollId, { slot })
+        .then((data) => {
+          upsertRemotePoll({ ...data.poll, responses: remotePolls.find((item) => item.id === pollId)?.responses });
+          notePollStatusChanges([data.poll]);
+          ui.pollReselect = "";
+          ui.toast = { title: "약속 확정", body: "그룹 캘린더에 일정이 표시됩니다." };
+          render();
+        })
+        .catch((err) => {
+          alert(err.status === 403 ? "그룹 생성자만 확정할 수 있습니다." : "확정하지 못했어요.");
+        });
+    }
+    return;
+  } else if (act === "unconfirm-poll") {
+    auth
+      .unconfirmPoll(id)
+      .then((data) => {
+        upsertRemotePoll({ ...data.poll, responses: remotePolls.find((item) => item.id === id)?.responses });
+        notePollStatusChanges([data.poll]);
+        ui.toast = { title: "확정 취소", body: "그룹 일정이 취소 상태로 바뀌었습니다." };
+        render();
+      })
+      .catch(() => alert("취소를 반영하지 못했어요."));
+    return;
+  } else if (act === "reconfirm-poll") {
+    ui.pollReselect = id;
+  } else if (act === "go-poll-event") {
+    const poll = remotePolls.find((item) => item.id === actEl.dataset.poll);
+    if (poll?.confirmedDate) {
+      const [y, m, d] = poll.confirmedDate.split("-").map(Number);
+      ui.date = new Date(y, m - 1, d);
+      ui.month = new Date(y, m - 1, 1);
+      ui.eventId = `gevent-${poll.id}`;
+      ui.modal = "event-detail";
+      go("/calendar");
+    }
+    return;
   }
   else if (act === "close-modal") {
     if (!auth.user() || ui.deletingAccount) return;
@@ -6424,12 +7436,20 @@ function onSubmit(event) {
   const act = form.dataset.act;
   const data = new FormData(form);
   if (act === "add-task") {
-    store.addTask({
+    const freq = String(data.get("repeatFreq") || "");
+    const subRaw = String(data.get("subtask") || "");
+    const task = store.addTask({
       title: data.get("title"),
       scheduledDate: data.get("date"),
       categoryId: data.get("categoryId") || "school",
       note: data.get("note") || "",
+      priority: data.get("priority") || "normal",
+      courseId: data.get("courseId") || "",
+      repeat: freq === "daily" || freq === "weekly" ? { freq, until: "" } : null,
     });
+    if (task && subRaw.trim()) {
+      subRaw.split(",").forEach((item) => store.addSubtask(task.id, item));
+    }
     ui.addingCategory = null;
   } else if (act === "save-task") {
     const typing = document.activeElement;
@@ -6452,6 +7472,7 @@ function onSubmit(event) {
         changes.categoryId = data.get("categoryId") || task.categoryId;
         changes.scheduledDate = data.get("scheduledDate") || task.scheduledDate;
         changes.dueDate = data.get("dueDate") || "";
+        changes.courseId = data.get("courseId") || "";
       }
       changes.priority = String(data.get("priority") || "normal");
       const freq = String(data.get("repeatFreq") || "");
@@ -6478,6 +7499,7 @@ function onSubmit(event) {
       picked === "전체"
         ? (group?.memberIds || []).map((id) => memberLabel(id))
         : [picked];
+    const assignmentGroupId = picked === "전체" ? `ag-${Date.now()}` : "";
     for (const assigneeName of assignees) {
       store.addTask({
         title,
@@ -6486,6 +7508,7 @@ function onSubmit(event) {
         dueDate,
         categoryId: "work",
         groupId,
+        assignmentGroupId,
       });
     }
     if (picked === "전체") {
@@ -6498,12 +7521,33 @@ function onSubmit(event) {
           title,
           assigneeName,
           dueDate,
+          assignmentGroupId,
         }),
       ),
     )
       .then(() => refreshGroupBundle())
       .catch(() => {
         alert("할 일 저장에 실패했어요. 다시 시도해 주세요.");
+      });
+  } else if (act === "add-group-link") {
+    const groupId = String(data.get("groupId") || "");
+    const name = String(data.get("name") || "").trim().slice(0, 80);
+    const url = safeLinkUrl(data.get("url"));
+    if (!groupId || !url) {
+      alert("http 또는 https로 시작하는 링크를 입력해 주세요.");
+      return;
+    }
+    const id = `link-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+    const optimistic = { id, groupId, type: "link", name: name || linkHost(url), url, createdAt: new Date().toISOString() };
+    groupLinks = [optimistic, ...groupLinks];
+    form.reset();
+    auth
+      .upsertGroupPage({ id, groupId, type: "link", name: optimistic.name, url })
+      .then(() => refreshGroupBundle())
+      .catch(() => {
+        groupLinks = groupLinks.filter((item) => item.id !== id);
+        alert("링크를 저장하지 못했어요. 다시 시도해 주세요.");
+        render();
       });
   } else if (act === "change-password") {
     const password = String(data.get("password") || "");
@@ -6617,26 +7661,51 @@ function onSubmit(event) {
     render();
     return;
   } else if (act === "add-event" || act === "save-event") {
+    const allDay = form.querySelector("[name='allDay']")?.checked;
     const startTime = data.get("startTime") || "09:00";
     const endTime = data.get("endTime") || "10:00";
-    if (timeToMinutes(endTime) <= timeToMinutes(startTime)) {
-      alert("종료 시간이 시작 시간보다 늦어야 합니다.");
+    if (!allDay && timeToMinutes(endTime) <= timeToMinutes(startTime)) {
+      ui.eventDraft = { error: "종료 시간이 시작 시간보다 늦어야 합니다." };
+      const err = form.querySelector(".field-error") || form.querySelector(".event-times");
+      if (form.querySelector(".field-error")) form.querySelector(".field-error").textContent = ui.eventDraft.error;
+      else {
+        const p = document.createElement("p");
+        p.className = "field-error";
+        p.id = "event-time-error";
+        p.textContent = ui.eventDraft.error;
+        form.querySelector(".event-times")?.after(p);
+      }
       return;
     }
+    const freq = String(data.get("repeatFreq") || "");
     const payload = {
       title: data.get("title"),
       date: data.get("date"),
       startTime,
       endTime,
+      allDay,
       color: eventColorValue(data.get("color")),
+      courseId: data.get("courseId") || "",
+      repeat: freq === "weekly" || freq === "biweekly" || freq === "monthly" ? { freq, until: data.get("repeatUntil") || "" } : null,
     };
     if (act === "save-event") {
+      const existing = (store.getState().events || []).find((item) => item.id === (data.get("id") || ui.eventId));
+      if (existing?.repeat?.freq) {
+        ui.eventDraft = payload;
+        ui.eventScope = "edit";
+        ui.eventOccurrence = String(data.get("occurrenceDate") || existing.date);
+        ui.modal = "event-scope";
+        render();
+        return;
+      }
       store.updateEvent(data.get("id") || ui.eventId, payload);
     } else {
       store.addEvent(payload);
     }
     ui.modal = null;
     ui.eventId = null;
+    ui.eventDraft = null;
+    ui.eventEndTouched = false;
   } else if (act === "add-course") {
     const id = String(data.get("id") || "");
     const slots = store.normalizeSlots(ui.courseSlotsDraft);
@@ -6669,6 +7738,9 @@ function onSubmit(event) {
     ui.modal = null;
     resetCourseDrafts();
     maybeSyncTimetable();
+  } else if (act === "preview-course-paste") {
+    ui.coursePasteText = String(data.get("text") || "");
+    ui.coursePasteRows = parseCoursePaste(ui.coursePasteText);
   } else if (act === "create-poll") {
     if (!requireLoginForGroups()) {
       render();
@@ -6791,7 +7863,27 @@ function onSubmit(event) {
 function onInput(event) {
   const el = event.target;
   if (el.dataset.act === "time-hour" || el.dataset.act === "time-minute") {
-    syncTimeField(el.closest("[data-time-field]"));
+    const field = el.closest("[data-time-field]");
+    syncTimeField(field);
+    const form = el.closest("form");
+    const fields = [...(form?.querySelectorAll("[data-time-field]") || [])];
+    if (field === fields[0] && !ui.eventEndTouched && fields[1]) {
+      const next = minutesToClock(timeToMinutes(syncTimeField(field)) + 60);
+      const hidden = fields[1].querySelector('input[type="hidden"]');
+      if (hidden) hidden.value = next;
+      const parts = clockParts(next);
+      const hourEl = fields[1].querySelector("[data-act='time-hour']");
+      const minuteEl = fields[1].querySelector("[data-act='time-minute']");
+      const ampmEl = fields[1].querySelector("[data-act='toggle-ampm']");
+      if (hourEl) hourEl.value = parts.hour12;
+      if (minuteEl) minuteEl.value = String(parts.minutes).padStart(2, "0");
+      if (ampmEl) {
+        ampmEl.classList.toggle("pm", parts.isPm);
+        ampmEl.setAttribute("aria-pressed", parts.isPm ? "true" : "false");
+        ampmEl.textContent = parts.isPm ? "오후" : "오전";
+      }
+    }
+    if (field === fields[1]) ui.eventEndTouched = true;
     return;
   }
   if (el.dataset.act === "course-color-pick") {
@@ -6856,6 +7948,10 @@ function onInput(event) {
   }
   if (el.dataset.act === "replace-q") {
     ui.replaceQ = el.value;
+    return;
+  }
+  if (el.dataset.act === "page-course-label") {
+    store.updatePage(el.dataset.id, { courseLabel: el.value.trim() });
     return;
   }
   if (el.dataset.act === "rename-page") {
@@ -7247,6 +8343,11 @@ async function boot() {
       store.updateSettings({ notifications: { [el.dataset.key]: el.checked } });
       return;
     }
+    if (el?.name === "pageCourse") {
+      const page = store.projectById(ui.notePageId);
+      if (page) store.updatePage(page.id, { courseId: el.value || undefined });
+      return;
+    }
     if (el?.dataset?.act === "upload-font") {
       const file = el.files?.[0];
       el.value = "";
@@ -7289,6 +8390,25 @@ async function boot() {
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") maybeRefreshGroupBundle();
   });
+  if (window.matchMedia("(pointer:fine)").matches) {
+    let pollDrag = null;
+    document.addEventListener("pointerdown", (event) => {
+      const cell = event.target.closest("[data-act='toggle-poll-slot']");
+      if (!cell || event.pointerType === "touch") return;
+      pollDrag = { pollId: cell.dataset.poll, seen: new Set([cell.dataset.slot]) };
+      ui.pollPick = { ...ui.pollPick, [cell.dataset.poll]: cell.dataset.slot };
+    });
+    document.addEventListener("pointerover", (event) => {
+      if (!pollDrag) return;
+      const cell = event.target.closest("[data-act='toggle-poll-slot']");
+      if (!cell || cell.dataset.poll !== pollDrag.pollId || pollDrag.seen.has(cell.dataset.slot)) return;
+      pollDrag.seen.add(cell.dataset.slot);
+      togglePollSlot(cell.dataset.poll, cell.dataset.slot);
+    });
+    document.addEventListener("pointerup", () => {
+      pollDrag = null;
+    });
+  }
   setInterval(maybeRefreshGroupBundle, 45000);
   window.visualViewport?.addEventListener("resize", syncKeyboard);
   window.visualViewport?.addEventListener("scroll", syncKeyboard);

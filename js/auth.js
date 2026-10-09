@@ -173,6 +173,7 @@ async function postGroup(action, payload) {
     const err = new Error(data?.reason || data?.error || "groups-unavailable");
     err.status = response.status;
     err.reason = data?.reason || data?.error;
+    err.payload = data;
     throw err;
   }
   return data;
@@ -233,6 +234,22 @@ export async function deleteGroupTask(taskId) {
 
 export async function markAvailability(pollId, slots, extra = {}) {
   return postGroup("mark-availability", { pollId, slots, ...extra });
+}
+
+export async function upsertGroupPage(payload) {
+  return postGroup("upsert-page", payload);
+}
+
+export async function deleteGroupPage(pageId) {
+  return postGroup("delete-page", { pageId });
+}
+
+export async function confirmPoll(pollId, payload = {}) {
+  return postGroup("confirm-poll", { pollId, ...payload });
+}
+
+export async function unconfirmPoll(pollId) {
+  return postGroup("unconfirm-poll", { pollId });
 }
 
 export async function findAvailability(members, range = {}) {

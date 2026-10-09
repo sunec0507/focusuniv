@@ -1,4 +1,4 @@
-const CACHE = "focusuniv-shell-v2";
+const CACHE = "focusuniv-shell-v3";
 const PRECACHE = [
   "/",
   "/index.html",
@@ -12,6 +12,7 @@ const PRECACHE = [
   "/js/vendor/gotrue.js",
   "/icons/icon-192.png",
   "/icons/icon-512.png",
+  "/privacy.html",
 ];
 
 self.addEventListener("install", (event) => {

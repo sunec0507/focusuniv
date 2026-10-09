@@ -1,4 +1,4 @@
-import { jsonb, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import { integer, jsonb, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 
 export const userStates = pgTable("user_states", {
   userId: text("user_id").primaryKey(),
@@ -29,6 +29,12 @@ export const meetingPolls = pgTable("meeting_polls", {
   startTime: text("start_time").notNull(),
   endTime: text("end_time").notNull(),
   createdBy: text("created_by").notNull(),
+  status: text("status").notNull().default("open"),
+  confirmedDate: text("confirmed_date"),
+  confirmedStart: text("confirmed_start"),
+  confirmedEnd: text("confirmed_end"),
+  confirmedBy: text("confirmed_by"),
+  confirmedAt: timestamp("confirmed_at"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -55,6 +61,24 @@ export const groupTasks = pgTable("group_tasks", {
   priority: text("priority").notNull().default("normal"),
   createdBy: text("created_by").notNull(),
   createdByName: text("created_by_name").notNull(),
+  assignmentGroupId: text("assignment_group_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const groupPages = pgTable("group_pages", {
+  id: text("id").primaryKey(),
+  groupId: text("group_id").notNull(),
+  parentId: text("parent_id"),
+  name: text("name").notNull(),
+  type: text("type").notNull(),
+  color: text("color"),
+  icon: text("icon"),
+  payload: jsonb("payload").notNull(),
+  revision: integer("revision").notNull().default(1),
+  updatedBy: text("updated_by").notNull(),
+  updatedByName: text("updated_by_name").notNull(),
+  createdBy: text("created_by").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });

@@ -31,18 +31,21 @@ Category colors stay on the dots only: school `#0EA5E9`, work `#6366F1`, persona
 
 ## Components
 
-- Hairline task rows: checkbox, title, duration, play.
-- Completion track: 8px rail with accent fill (`scaleX`).
-- Circular timer: 10px SVG ring, clock in the hole.
-- Timeline: 48px hour rows, minute columns as thin vertical rules, sessions as short color blocks.
-- Focus desk: ink bar, pill tabs for 오늘 할 일 / 타이머 / 그룹 / 프로젝트 / 캘린더, timer keeps running.
-- Projects: Notion-like tree + slash blocks (heading, list, todo, toggle, quote, divider, code, table, callout, child page).
-- AI coach: unread bell + toast on day rollover.
+- Hairline task rows: checkbox, title, duration, play. First-time focus uses a `집중 시작` label beside play; after any session exists, icon only.
+- Completion track: 8px rail with accent fill (`scaleX`). Calendar cells show the track, not a percent numeral.
+- Circular timer: 10px SVG ring, clock in the hole. The measured task title stays visible while running.
+- Timeline (공부 기록): 48px hour rows, minute columns as thin vertical rules, sessions as short color blocks.
+- Focus desk: ink bar, pill tabs for 오늘 할 일 / 타이머 / 팀플 / 내 자료 / 캘린더, timer keeps running.
+- 내 자료 / 팀플 자료: Notion-like tree + slash blocks. Primary toolbar is bold, list, checklist, link, file. Advanced formatting stays in 더보기. PDF tools appear only on PDF pages.
+- Team share banner: “팀플 멤버에게 공유되는 자료입니다” plus save state.
+- Meeting poll: count `가능 n/전체` in each cell. Selected cells use an ink inset border; recommended cells use a dashed outline and a 추천 label. Color intensity is secondary.
+- Calendar: time events as filled chips, due tasks as dashed chips, team events with a 팀플 badge, overflow as `+N`.
+- AI coach: unread bell + toast on day rollover. Work alerts and product update notes are listed separately.
 
 ## Motion
 
-One moment: the completion fill eases in with `cubic-bezier(0.16, 1, 0.3, 1)`. The ring stroke updates on the clock tick. No entrance choreography on every section.
+One moment: the completion fill eases in with `cubic-bezier(0.16, 1, 0.3, 1)`. The ring stroke updates on the clock tick. No entrance choreography on every section. Honor `prefers-reduced-motion`.
 
 ## Responsive
 
-860px collapses the rail to a four-item bottom nav plus More. Project tree stacks above the editor. Task duration hides; play stays. Today/timetable split stacks from 1080px so the timetable is not crushed.
+860px collapses the rail to a four-item bottom nav plus More. A floating 빠른 추가 button sits above the nav and does not add a fifth tab. Desktop search lives in the sidebar; mobile search stays in the top bar. Project tree stacks above the editor. Task duration hides; play stays. Today/timetable split stacks from 1080px so the timetable is not crushed.
