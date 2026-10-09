@@ -119,9 +119,6 @@ const ui = {
   pdfZoom: 1,
   pdfInk: { mode: "off", color: "#111827", width: 3.5 },
   pdfNotesOpen: false,
-  pdfAiOpen: false,
-  pdfAiTab: "summary",
-  pdfAiBusy: false,
   noteQuery: "",
   notePageId: null,
   courseId: null,
@@ -2189,7 +2186,6 @@ function viewGpa() {
             `<button type="button" class="gpa-chip ${filter === semester ? "on" : ""}" data-act="gpa-semester" data-semester="${escapeHtml(semester)}">${escapeHtml(semester)}</button>`,
         )
         .join("")}
-      <button type="button" class="gpa-chip" data-act="export-gpa-csv">CSV 내보내기</button>
     </div>
     ${
       sections.length
@@ -3168,47 +3164,20 @@ function folderPaneHtml(page, scope, parentAttr) {
 const PDF_INK_COLORS = ["#111827", "#dc2626", "#2563eb", "#16a34a", "#ca8a04"];
 const PDF_INK_WIDTHS = [2, 3.5, 6];
 
-function pdfAiSummaryHtml(page) {
-  if (!page.pdfUri) {
-    return `<p class="page-date">이 기기에 PDF 파일이 없어서 AI 기능을 쓸 수 없어요</p>`;
-  }
-  const summary = page.aiSummary?.summary || "";
-  const points = Array.isArray(page.aiSummary?.keyPoints) ? page.aiSummary.keyPoints : [];
-  const busy = Boolean(ui.pdfAiBusy);
-  if (busy) {
-    return `<p class="page-date">요약 만드는 중...</p>
-      <button type="button" class="primary" data-act="pdf-ai-summarize" data-id="${page.id}" disabled>요약 만드는 중...</button>`;
-  }
-  if (summary || points.length) {
-    return `
-      <p class="pdf-ai-summary">${escapeHtml(summary)}</p>
-      ${
-        points.length
-          ? `<ul class="pdf-ai-points">${points.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
-          : ""
-      }
-      <button type="button" class="ghost" data-act="pdf-ai-summarize" data-id="${page.id}">다시 생성</button>`;
-  }
-  return `<button type="button" class="primary" data-act="pdf-ai-summarize" data-id="${page.id}">AI 요약 생성</button>`;
-}
-
 function pdfViewerHtml(page, scope) {
   const n = Math.max(1, Number(page.pdfPage) || 1);
   const zoom = Math.round((Number(ui.pdfZoom) || 1) * 100);
   const ink = ui.pdfInk || { mode: "off", color: "#111827", width: 3.5 };
   const notesOpen = Boolean(ui.pdfNotesOpen);
-  const aiOpen = Boolean(ui.pdfAiOpen);
-  const sideOpen = notesOpen || aiOpen;
-  const tab = ui.pdfAiTab === "quiz" || ui.pdfAiTab === "ask" ? ui.pdfAiTab : "summary";
+  const sideOpen = notesOpen;
   return `
     <div class="pdf-view ${sideOpen ? "notes-open" : ""}">
       ${noteCrumbsHtml(page, scope)}
       <div class="folder-head pdf-head">
         <input class="page-name folder-name" data-act="rename-page" data-id="${page.id}" value="${escapeHtml(page.name)}" placeholder="제목">
         <button type="button" class="ghost pdf-notes-toggle ${notesOpen ? "on" : ""}" data-act="toggle-pdf-notes" aria-expanded="${notesOpen ? "true" : "false"}" aria-controls="pdf-notes-panel">${icon("comment", 16)} 메모</button>
-        <button type="button" class="ghost pdf-notes-toggle ${aiOpen ? "on" : ""}" data-act="toggle-pdf-ai" aria-expanded="${aiOpen ? "true" : "false"}" aria-controls="pdf-ai-panel">✨ AI 학습</button>
       </div>
-      <div class="pdf-workspace ${sideOpen ? "notes-open" : ""} ${aiOpen ? "ai-open" : ""}">
+      <div class="pdf-workspace ${sideOpen ? "notes-open" : ""}">
       <div class="pdf-viewer ${ink.mode !== "off" ? "inking" : ""}" data-pdf-viewer data-id="${page.id}">
         <aside class="pdf-thumbs" data-pdf-thumbs aria-label="페이지 목록"></aside>
         <section class="pdf-stage">
@@ -3260,18 +3229,6 @@ function pdfViewerHtml(page, scope) {
           <span>이 PDF에 대한 정리 · 필기와는 별도입니다</span>
         </div>
         <textarea class="field pdf-notes-input" data-act="pdf-notes" data-id="${page.id}" placeholder="요약, 질문, 할 말을 적어 두세요">${escapeHtml(page.pdfNotes || "")}</textarea>
-      </aside>
-      <aside class="pdf-notes pdf-ai" id="pdf-ai-panel" ${aiOpen ? "" : "hidden"}>
-        <div class="pdf-notes-head">
-          <b>AI 학습</b>
-          <span>이 기기 PDF를 바탕으로 요약을 만듭니다</span>
-        </div>
-        <div class="gpa-tabs">
-          <button type="button" class="gpa-tab ${tab === "summary" ? "on" : ""}" data-act="pdf-ai-tab" data-tab="summary">요약</button>
-          <button type="button" class="gpa-tab ${tab === "quiz" ? "on" : ""}" data-act="pdf-ai-tab" data-tab="quiz">퀴즈</button>
-          <button type="button" class="gpa-tab ${tab === "ask" ? "on" : ""}" data-act="pdf-ai-tab" data-tab="ask">튜터</button>
-        </div>
-        ${tab === "summary" ? pdfAiSummaryHtml(page) : `<p class="page-date">이 탭은 아직 준비 중입니다.</p>`}
       </aside>
       </div>
     </div>`;
@@ -4069,19 +4026,6 @@ function settingsAccount() {
       <input class="field" name="email" type="email" placeholder="새 이메일" required>
       <button class="primary" type="submit">이메일 변경</button>
     </form>
-    <div class="settings-form">
-      <h3 class="settings-h">연동</h3>
-      <button class="ghost" type="button" disabled>Google로 연동</button>
-      <p class="page-date">Google 등 소셜 로그인 연동은 Netlify Identity 대시보드 설정이 필요합니다</p>
-    </div>
-    <div class="settings-form">
-      <h3 class="settings-h">데이터 내보내기</h3>
-      <p class="page-date">할 일, 시간표, 성적, 노트 등을 받습니다. 실행 중인 타이머와 로그인 정보는 넣지 않습니다.</p>
-      <div class="settings-actions">
-        <button class="ghost" type="button" data-act="export-data">JSON 백업 받기</button>
-        <button class="ghost" type="button" data-act="export-gpa-csv">GPA CSV 받기</button>
-      </div>
-    </div>
     <div class="settings-form">
       <h3 class="settings-h">계정 삭제</h3>
       <p class="page-date">계정과 서버에 저장된 데이터가 지워지며 되돌릴 수 없습니다.</p>
@@ -5031,32 +4975,6 @@ export function render() {
   const pdfHost = document.querySelector("[data-pdf-viewer]");
   if (pdfHost) mountPdfViewer(pdfHost);
   else dropPdfDocCache();
-}
-
-function downloadBlob(filename, blob) {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-}
-
-function exportBackupJson() {
-  const payload = store.exportBackupPayload();
-  downloadBlob(
-    `focusuniv-backup-${formatDateKey(new Date())}.json`,
-    new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }),
-  );
-}
-
-function exportGpaCsvFile() {
-  downloadBlob(
-    `focusuniv-gpa-${formatDateKey(new Date())}.csv`,
-    new Blob([store.exportGpaCsv()], { type: "text/csv;charset=utf-8" }),
-  );
 }
 
 function leaveDeletedAccount() {
@@ -6170,24 +6088,15 @@ function syncPdfNotesChrome() {
   const view = document.querySelector(".pdf-view");
   if (!view) return;
   const notesOpen = Boolean(ui.pdfNotesOpen);
-  const aiOpen = Boolean(ui.pdfAiOpen);
   const workspace = view.querySelector(".pdf-workspace");
   const panel = view.querySelector("[data-pdf-notes]");
   const btn = view.querySelector("[data-act='toggle-pdf-notes']");
-  const aiPanel = view.querySelector("#pdf-ai-panel");
-  const aiBtn = view.querySelector("[data-act='toggle-pdf-ai']");
-  view.classList.toggle("notes-open", notesOpen || aiOpen);
-  workspace?.classList.toggle("notes-open", notesOpen || aiOpen);
-  workspace?.classList.toggle("ai-open", aiOpen);
+  view.classList.toggle("notes-open", notesOpen);
+  workspace?.classList.toggle("notes-open", notesOpen);
   if (panel) panel.hidden = !notesOpen;
-  if (aiPanel) aiPanel.hidden = !aiOpen;
   if (btn) {
     btn.classList.toggle("on", notesOpen);
     btn.setAttribute("aria-expanded", String(notesOpen));
-  }
-  if (aiBtn) {
-    aiBtn.classList.toggle("on", aiOpen);
-    aiBtn.setAttribute("aria-expanded", String(aiOpen));
   }
 }
 
@@ -6802,57 +6711,6 @@ function onClick(event) {
       requestAnimationFrame(() => document.querySelector("[data-act='pdf-notes']")?.focus());
     }
     return;
-  } else if (act === "toggle-pdf-ai") {
-    ui.pdfAiOpen = !ui.pdfAiOpen;
-    syncPdfNotesChrome();
-    if (ui.pdfAiOpen) {
-      requestAnimationFrame(() => document.querySelector("#pdf-ai-panel .gpa-tab, #pdf-ai-panel button")?.focus());
-    }
-    return;
-  } else if (act === "pdf-ai-tab") {
-    ui.pdfAiTab = actEl.dataset.tab === "quiz" || actEl.dataset.tab === "ask" ? actEl.dataset.tab : "summary";
-    render();
-    return;
-  } else if (act === "pdf-ai-summarize") {
-    if (ui.pdfAiBusy) return;
-    const page = store.projectById(id);
-    if (!page?.pdfUri) {
-      alert("이 기기에 PDF 파일이 없어서 AI 기능을 쓸 수 없어요");
-      return;
-    }
-    const comma = String(page.pdfUri).indexOf(",");
-    const base64 = comma >= 0 ? String(page.pdfUri).slice(comma + 1) : "";
-    if (!base64) {
-      alert("PDF 요약에 실패했어요. 다시 시도해 주세요.");
-      return;
-    }
-    if (Math.floor((base64.length * 3) / 4) > 15 * 1024 * 1024) {
-      alert("PDF가 너무 커서 요약할 수 없어요.");
-      return;
-    }
-    ui.pdfAiBusy = true;
-    ui.pdfAiOpen = true;
-    ui.pdfAiTab = "summary";
-    render();
-    auth
-      .askCoach({ action: "pdf-summarize", pageId: page.id, pdfBase64: base64 })
-      .then((data) => {
-        store.updatePage(page.id, {
-          aiSummary: {
-            summary: String(data?.summary || ""),
-            keyPoints: Array.isArray(data?.keyPoints) ? data.keyPoints.map((item) => String(item || "")).filter(Boolean).slice(0, 5) : [],
-            generatedAt: Date.now(),
-          },
-        });
-      })
-      .catch(() => {
-        alert("PDF 요약에 실패했어요. 다시 시도해 주세요.");
-      })
-      .finally(() => {
-        ui.pdfAiBusy = false;
-        render();
-      });
-    return;
   } else if (act === "pdf-ink") {
     const ink = pdfInkState();
     ui.pdfInk = { ...ink, mode: ink.mode === "pen" ? "off" : "pen" };
@@ -7388,13 +7246,7 @@ function onClick(event) {
     document.querySelector(".toast-stack")?.remove();
     return;
   }
-  else if (act === "export-data") {
-    exportBackupJson();
-    return;
-  } else if (act === "export-gpa-csv") {
-    exportGpaCsvFile();
-    return;
-  } else if (act === "open-delete-account") {
+  else if (act === "open-delete-account") {
     if (!auth.user()) return;
     ui.modal = "delete-account";
     ui.deletingAccount = false;

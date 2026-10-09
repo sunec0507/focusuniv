@@ -2819,21 +2819,6 @@ button.folder-crumb:hover { background: var(--hover); color: var(--ink); }
   font-size: 14px;
   line-height: 1.55;
 }
-.pdf-ai .gpa-tabs { margin: 0; }
-.pdf-ai-summary {
-  margin: 0;
-  font-size: 14px;
-  line-height: 1.6;
-  color: var(--ink);
-  white-space: pre-wrap;
-}
-.pdf-ai-points {
-  margin: 0;
-  padding-left: 18px;
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--ink);
-}
 .pdf-workspace.notes-open > .pdf-viewer {
   border-top-right-radius: 0;
   border-bottom-right-radius: 0;
