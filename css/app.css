@@ -4116,3 +4116,47 @@ button.tv-sched-row { cursor: pointer; }
 .tv-day.sel .tv-day-label { color: color-mix(in srgb, var(--bg) 72%, transparent); }
 .tv-marks { display: flex; align-items: center; justify-content: center; gap: 3px; height: 12px; color: var(--accent); }
 .tv-marks i { width: 5px; height: 5px; border-radius: 50%; }
+
+/* ---- 사용자 피드백 반영 (2026-10-10): 누름 표시, 여백, 정렬 ---- */
+/* 버튼을 누르는 순간 배경이 진해져서 눌렸다는 걸 알 수 있게 */
+.tv-arrow, .m-nav-btn, .icon-btn, .date-chip, .m-pill, .m-round, .tv-today-pill { transition: background-color 0.12s, transform 0.12s; }
+.tv-arrow:active, .m-nav-btn:active, .icon-btn:active, .date-chip:active, .m-round:active,
+.ghost:active, .tv-day:active .tv-pill { background: color-mix(in srgb, var(--ink) 12%, transparent); transform: scale(0.94); }
+.m-pill:active, .tv-today-pill:active { background: color-mix(in srgb, var(--accent) 22%, transparent); transform: scale(0.96); }
+.primary:active { filter: brightness(0.92); }
+
+/* 캘린더 요일: 날짜 숫자와 같이 가운데 정렬 */
+.cal-head { display: grid; place-items: center; text-align: center; }
+
+/* 일정·할 일 창: 입력칸 사이를 넉넉히 */
+.modal { padding: 26px 22px 22px; }
+.modal h2 { margin-bottom: 20px; }
+.modal form.stack { gap: 16px; }
+.modal .event-times { gap: 16px; }
+.modal .time-field-wrap { gap: 8px; }
+.modal .event-durations { gap: 8px; }
+.modal .composer-more { margin-top: 0; }
+.modal form.stack > .primary { margin-top: 8px; }
+.modal form.stack > .primary + .ghost { margin-top: -6px; }
+
+@media (max-width: 860px) {
+  /* 제목은 폰에서 한 단계 작게 */
+  .mtop-title { font-size: 24px; letter-spacing: -0.4px; }
+  .mtop-total { font-size: 16px; }
+
+  /* 캘린더: 화면 끝에서 8px 띄우고, 칸 높이 줄이기 */
+  .cal-grid { margin-left: -8px; margin-right: -8px; border-radius: 12px; border: 1px solid var(--line); overflow: hidden; }
+  .cal-cell { min-height: 86px; }
+  .cal-head { min-height: 32px; }
+
+  /* 오늘 할 일: 주간 · 시간표 · 할 일 · 마감 사이를 얇은 선으로 나누기 */
+  .tv-sched, .tv-tasks, .tv-due { padding-top: 20px; border-top: 1px solid var(--line); }
+  .today-v2 { gap: 20px; }
+
+  /* 할 일이 없는 날 타임라인 안내는 작게 */
+  .tl-tasks .empty { padding: 14px 6px; border: 0; background: transparent; text-align: left; }
+  .tl-tasks .empty b { font-size: 13px; }
+  .tl-tasks .empty p { margin: 4px 0 0; font-size: 12px; }
+
+  .modal { max-height: calc(100dvh - 32px); overflow-y: auto; }
+}

@@ -1,4 +1,4 @@
-const CACHE = "focusuniv-shell-v9";
+const CACHE = "focusuniv-shell-v10";
 const PRECACHE = [
   "/",
   "/index.html",
